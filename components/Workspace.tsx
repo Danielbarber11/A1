@@ -1,41 +1,55 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { ChatMessage, Role, ChatMode, User, AdRequest } from '../types';
-import { sendMessageToGemini, sendMessageToGeminiStream } from '../services/geminiService';
+import { sendMessageToGeminiStream } from '../services/geminiService';
 import AccessibilityManager from './AccessibilityManager';
 
 interface WorkspaceProps {
+  projectId?: string;
   initialPrompt: string;
   initialLanguage: string;
   initialFiles: FileList | null;
   initialChatMode: ChatMode;
+  initialCode?: string;
+  initialCreatorMessages?: ChatMessage[];
+  initialQuestionMessages?: ChatMessage[];
+  initialCodeHistory?: string[];
+  
   modelId: string;
   onBack: () => void;
+  onSaveProject: (id: string, code: string, creatorMessages: ChatMessage[], questionMessages: ChatMessage[], codeHistory: string[]) => void;
   user: User | null;
   approvedAds?: AdRequest[];
   onActivateAdSupportedPremium: () => void;
 }
 
 const Workspace: React.FC<WorkspaceProps> = ({ 
+    projectId,
     initialPrompt, 
     initialLanguage, 
     initialFiles, 
     initialChatMode, 
+    initialCode = '',
+    initialCreatorMessages = [],
+    initialQuestionMessages = [],
+    initialCodeHistory = [],
+    
     modelId, 
     onBack, 
+    onSaveProject,
     user,
     approvedAds = [],
     onActivateAdSupportedPremium
 }) => {
-  const [creatorMessages, setCreatorMessages] = useState<ChatMessage[]>([]);
-  const [questionMessages, setQuestionMessages] = useState<ChatMessage[]>([]);
+  const [creatorMessages, setCreatorMessages] = useState<ChatMessage[]>(initialCreatorMessages);
+  const [questionMessages, setQuestionMessages] = useState<ChatMessage[]>(initialQuestionMessages);
   
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   
-  const [code, setCode] = useState('');
-  const [codeHistory, setCodeHistory] = useState<string[]>([]);
-  const [historyIndex, setHistoryIndex] = useState(-1);
+  const [code, setCode] = useState(initialCode);
+  const [codeHistory, setCodeHistory] = useState<string[]>(initialCodeHistory);
+  const [historyIndex, setHistoryIndex] = useState(initialCodeHistory.length > 0 ? initialCodeHistory.length - 1 : -1);
   const [isEditing, setIsEditing] = useState(false);
   
   const [activeView, setActiveView] = useState<'preview' | 'code'>('preview');
@@ -47,13 +61,23 @@ const Workspace: React.FC<WorkspaceProps> = ({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const lastMsgCount = useRef(0);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const isWebLanguage = initialLanguage === 'HTML/CSS/JS' || initialLanguage === 'React';
   const currentMessages = chatMode === ChatMode.CREATOR ? creatorMessages : questionMessages;
 
-  const isPremiumUser = user?.isPremium || user?.isAdmin;
-  // Paid Premium = No Ads. Ad-Supported = Ads. Free = Ads.
-  // Note: For Ad-Supported Premium, we inject ads into the site itself.
-  const shouldShowLoadingAds = !isPremiumUser; // Free users see loading ads
+  const isPremiumUser = user?.isPremium && !user?.hasAdSupportedPremium; 
+  const isFreeOrAdSupported = !isPremiumUser;
+
+  // Auto-Save Logic (Debounced)
+  useEffect(() => {
+      if (projectId) {
+          if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+          saveTimeoutRef.current = setTimeout(() => {
+              onSaveProject(projectId, code, creatorMessages, questionMessages, codeHistory);
+          }, 2000); // Save after 2 seconds of inactivity
+      }
+  }, [code, creatorMessages, questionMessages, codeHistory, projectId, onSaveProject]);
 
   const pushNewVersion = (newCode: string) => {
     if (!newCode) return;
@@ -79,18 +103,28 @@ const Workspace: React.FC<WorkspaceProps> = ({
     }
   };
 
-  // Pick random ad when loading starts
+  // Pick random ad logic
   useEffect(() => {
-      if (isLoading && approvedAds.length > 0 && shouldShowLoadingAds) {
+      // Logic for picking ads remains...
+      if ((isLoading || !code) && approvedAds.length > 0 && isFreeOrAdSupported) {
           const randomIndex = Math.floor(Math.random() * approvedAds.length);
           setCurrentAd(approvedAds[randomIndex]);
       } else {
-          setCurrentAd(null);
+          // Keep showing if no code, otherwise hide
+          if (code) setCurrentAd(null);
+          else if (approvedAds.length > 0 && isFreeOrAdSupported) {
+               setCurrentAd(approvedAds[Math.floor(Math.random() * approvedAds.length)]);
+          }
       }
-  }, [isLoading, approvedAds, shouldShowLoadingAds]);
+  }, [isLoading, approvedAds, isFreeOrAdSupported, code]);
 
   useEffect(() => {
     const initChat = async () => {
+      // IF WE ALREADY HAVE MESSAGES OR CODE, DO NOT REGENERATE
+      if (initialCreatorMessages.length > 0 || initialCode) {
+          return; 
+      }
+
       const userMsg: ChatMessage = {
         id: Date.now().toString(),
         role: Role.USER,
@@ -122,12 +156,10 @@ const Workspace: React.FC<WorkspaceProps> = ({
   }, [currentMessages.length, chatMode]);
 
   const handleQuickAction = (type: 'BUGS' | 'SECURITY' | 'DEPLOY') => {
-      // Lock Deployment for Free Users
-      if (type === 'DEPLOY' && !isPremiumUser) {
+      if (type === 'DEPLOY' && !user?.isPremium) {
           alert("פרסום האתר לשרתים זמין למנויי פרימיום בלבד!");
           return;
       }
-
       let prompt = "";
       switch(type) {
           case 'BUGS': prompt = "אנא סרוק את הקוד ומצא שגיאות."; break;
@@ -138,7 +170,7 @@ const Workspace: React.FC<WorkspaceProps> = ({
   };
 
   const handleEditToggle = () => {
-      if (!isPremiumUser) {
+      if (!user?.isPremium) {
           alert("עריכת קוד ידנית זמינה למנויי פרימיום בלבד! שדרג עכשיו כדי לפתוח אפשרות זו.");
           return;
       }
@@ -157,7 +189,7 @@ const Workspace: React.FC<WorkspaceProps> = ({
 
     if (chatMode === ChatMode.CREATOR) {
         setCreatorMessages(prev => [...prev, userMsg]);
-        pushNewVersion(code); // Save current version before new generation
+        pushNewVersion(code); 
     } else {
         setQuestionMessages(prev => [...prev, userMsg]);
     }
@@ -168,7 +200,6 @@ const Workspace: React.FC<WorkspaceProps> = ({
 
     const historyToUse = chatMode === ChatMode.CREATOR ? creatorMessages : questionMessages;
     try {
-        // IMPORTANT: Pass 'code' as currentCodeContext so the bot edits it
         await handleStreamingResponse(promptText, historyToUse, null, chatMode, code);
     } catch (error) {
         console.error(error);
@@ -216,13 +247,11 @@ const Workspace: React.FC<WorkspaceProps> = ({
     }
   };
 
-  // --- SEPARATOR-BASED EXTRACTION ---
   const SEPARATOR = "___AIVAN_CODE_START___";
 
   const extractCode = (text: string) => {
     const parts = text.split(SEPARATOR);
     if (parts.length < 2) {
-         // Fallback logic if streaming hasn't reached separator yet or bot messed up
          const codeBlockRegex = /```(?:\w+)?\n([\s\S]*?)```/g;
          let match;
          let foundCode = '';
@@ -231,15 +260,12 @@ const Workspace: React.FC<WorkspaceProps> = ({
          return;
     }
     
-    // Valid separator found
     const codePart = parts[1];
-    
     const codeBlockRegex = /```(?:\w+)?\n([\s\S]*?)```/g;
     let match;
     let foundCode = '';
     while ((match = codeBlockRegex.exec(codePart)) !== null) foundCode += match[1] + '\n\n';
     
-    // Also try to capture streaming (unclosed) blocks in the code part
     const openBlockMatch = codePart.match(/```(?:\w+)?\n([\s\S]*?)$/);
     if (openBlockMatch && !codePart.endsWith('```')) foundCode += openBlockMatch[1];
 
@@ -248,7 +274,6 @@ const Workspace: React.FC<WorkspaceProps> = ({
 
   const cleanMessage = (text: string) => {
     if (!text) return '';
-    // Split by separator and take the first part (Text Explanation)
     return text.split(SEPARATOR)[0].trim();
   };
 
@@ -278,36 +303,33 @@ const Workspace: React.FC<WorkspaceProps> = ({
   const getCodeWithFooter = (originalCode: string) => {
       if (!originalCode) return "";
       
-      // Footer Injection
-      const footerHTML = `<footer style="width: 100%; padding: 20px; text-align: center; background: #f8f9fa; color: #6c757d; font-family: sans-serif; font-size: 12px; border-top: 1px solid #e9ecef; margin-top: auto;">נבנה בעזרת בינה מלאכותית ע"י <strong style="color: #9333ea;">AIVAN</strong></footer>`;
+      let footerHTML = `<footer style="width: 100%; padding: 20px; text-align: center; background: #f8f9fa; color: #6c757d; font-family: sans-serif; font-size: 12px; border-top: 1px solid #e9ecef; margin-top: auto;">`;
+      footerHTML += `נבנה בעזרת בינה מלאכותית ע"י <strong style="color: #9333ea;">AIVAN</strong>`;
       
-      // Ad Injection for Ad-Supported Premium
-      let adHTML = "";
-      if (user?.hasAdSupportedPremium) {
-          adHTML = `
-            <div style="position: fixed; bottom: 0; left: 0; width: 100%; bg-white; border-top: 1px solid #ccc; padding: 10px; text-align: center; font-family: sans-serif; font-size: 12px; background: #fff; z-index: 9999; box-shadow: 0 -2px 10px rgba(0,0,0,0.1);">
-                <span style="background: #f1c40f; color: #000; padding: 2px 6px; border-radius: 4px; font-weight: bold; margin-right: 8px;">AD</span>
-                <strong>אתר זה נתמך ע"י Aivan Ads</strong> - <a href="#" style="color: #9b59b6;">הסר פרסומות</a>
+      if (isFreeOrAdSupported) {
+          footerHTML += `<br/><br/><span style="font-size: 10px; color: #999;">Aivan participates in the Amazon Services LLC Associates Program. As an Amazon Associate, we earn from qualifying purchases.</span>`;
+          footerHTML += `</footer>`;
+
+          // Placeholder Amazon Ad
+          const adHTML = `
+            <div id="aivan-amazon-ad" style="width: 100%; background: #fff; border-top: 2px solid #ff9900; padding: 15px; text-align: center; font-family: sans-serif; box-shadow: 0 -4px 10px rgba(0,0,0,0.05); margin-top: 20px;">
+                <div style="max-width: 728px; height: 90px; background: #f3f3f3; margin: 0 auto; display: flex; align-items: center; justify-content: center; border: 1px dashed #ccc; color: #666;">
+                    <span style="font-weight: bold; color: #ff9900;">Amazon</span>&nbsp;Ad Space Reserved (728x90)
+                </div>
             </div>
-            <div style="height: 40px;"></div> <!-- Spacer -->
           `;
+          
+          let modifiedCode = originalCode;
+          modifiedCode = modifiedCode.includes('</body>') 
+              ? modifiedCode.replace('</body>', `${adHTML}${footerHTML}</body>`) 
+              : modifiedCode + adHTML + footerHTML;
+          return modifiedCode;
+      } else {
+          footerHTML += `</footer>`;
+          return originalCode.includes('</body>') 
+              ? originalCode.replace('</body>', `${footerHTML}</body>`) 
+              : originalCode + footerHTML;
       }
-
-      let modifiedCode = originalCode;
-      
-      // Inject Footer
-      modifiedCode = modifiedCode.includes('</body>') 
-          ? modifiedCode.replace('</body>', `${footerHTML}</body>`) 
-          : modifiedCode + footerHTML;
-
-      // Inject Ad (If active)
-      if (adHTML) {
-          modifiedCode = modifiedCode.includes('</body>')
-              ? modifiedCode.replace('</body>', `${adHTML}</body>`)
-              : modifiedCode + adHTML;
-      }
-
-      return modifiedCode;
   };
 
   return (
@@ -327,11 +349,10 @@ const Workspace: React.FC<WorkspaceProps> = ({
 
          <div className="flex-1 relative bg-gray-50 overflow-hidden">
             <div className={`absolute inset-0 w-full h-full ${activeView === 'preview' ? 'block' : 'hidden'}`}>
-                {(isLoading || !code) ? (
+                {(!code || (isLoading && !code)) ? (
                     <div className="absolute inset-0 z-50 flex items-center justify-center bg-gray-100">
                          <div className="border-4 border-dashed border-gray-400/30 w-[90%] h-[90%] rounded-3xl relative overflow-hidden bg-white shadow-xl flex flex-col items-center justify-center">
-                             {/* Display REAL AD content if available, else placeholder */}
-                             {shouldShowLoadingAds && currentAd ? (
+                             {isFreeOrAdSupported && currentAd ? (
                                 <div className="flex flex-col h-full w-full">
                                     <div className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-gradient-to-br from-white to-gray-50">
                                          <span className="bg-gray-100 text-gray-500 text-[10px] font-bold px-2 py-1 rounded mb-6 tracking-widest uppercase">פרסומת</span>
@@ -358,8 +379,11 @@ const Workspace: React.FC<WorkspaceProps> = ({
                                         בחסות Aivan Ads
                                     </div>
                                 </div>
-                             ) : shouldShowLoadingAds ? (
-                                <h2 className="text-4xl font-black text-gray-300 uppercase tracking-widest text-center">שטח פרסום<br/>שמור</h2>
+                             ) : isFreeOrAdSupported ? (
+                                <div className="text-center">
+                                    <h2 className="text-4xl font-black text-gray-300 uppercase tracking-widest text-center">שטח פרסום<br/>שמור</h2>
+                                    <p className="text-xs text-gray-400 mt-2">הצטרף לפרימיום להסרת פרסומות</p>
+                                </div>
                              ) : (
                                 <div className="text-center text-gray-400">
                                     <i className="fas fa-magic text-4xl mb-4 text-purple-200"></i>
@@ -445,7 +469,7 @@ const Workspace: React.FC<WorkspaceProps> = ({
       <div className="w-[400px] border-r border-gray-200 bg-white flex flex-col h-full flex-shrink-0 z-30 shadow-xl">
          <header className="h-16 flex items-center justify-center border-b border-gray-100 relative">
              <div className="flex flex-col items-center">
-                 <span className="text-[10px] font-black text-gray-400 tracking-[0.2em] uppercase">Aivan</span>
+                 <span className="text-[10px] font-black text-gray-400 tracking-[0.2em] uppercase">AIVAN</span>
                  <div className="bg-gray-100 p-1 rounded-full flex items-center gap-1">
                      <button onClick={() => setChatMode(ChatMode.CREATOR)} className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all ${chatMode === ChatMode.CREATOR ? 'bg-white text-purple-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}>סוכן</button>
                      <div className="w-px h-3 bg-gray-300"></div>
@@ -456,7 +480,6 @@ const Workspace: React.FC<WorkspaceProps> = ({
 
          <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50/50">
             {currentMessages.map((msg, idx) => {
-               // Clean message from code blocks
                const displayText = cleanMessage(msg.text);
                const isEmpty = !displayText.trim();
 

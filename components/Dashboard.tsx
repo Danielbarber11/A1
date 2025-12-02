@@ -1,18 +1,19 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { ProjectConfig, User, SettingsTab, ChatMode } from '../types';
+import { ProjectConfig, User, SettingsTab, ChatMode, SavedProject } from '../types';
 import AccessibilityManager from './AccessibilityManager';
 import SettingsModal from './SettingsModal';
 
 interface DashboardProps {
   onStartProject: (config: ProjectConfig) => void;
-  history: string[];
+  onOpenProject: (project: SavedProject) => void;
+  savedProjects: SavedProject[];
   onLogout: () => void;
   user: User | null;
   onUpdateUser: (user: User) => void;
   onClearHistory: () => void;
-  onDeleteHistoryItem: (index: number) => void;
-  onRenameHistoryItem: (index: number, newName: string) => void;
+  onDeleteHistoryItem: (id: string) => void;
+  onRenameHistoryItem: (id: string, newName: string) => void;
   onShowPremium: () => void;
   onShowAdvertise: () => void;
   onShowAdManagement: () => void;
@@ -113,7 +114,8 @@ const AnimatedSelect = ({
 
 const Dashboard: React.FC<DashboardProps> = ({ 
   onStartProject, 
-  history, 
+  onOpenProject,
+  savedProjects, 
   onLogout, 
   user, 
   onUpdateUser,
@@ -152,7 +154,6 @@ const Dashboard: React.FC<DashboardProps> = ({
   const handleSend = () => {
     if (!prompt.trim()) return;
     
-    // ENFORCE MODEL RESTRICTION
     if (model === 'gemini-3-pro-preview' && !user?.isPremium && !user?.isAdmin) {
         alert("מודל Aivan Pro (Smart) זמין למנויי פרימיום בלבד. אנא שדרג או בחר במודל המהיר.");
         onShowPremium();
@@ -225,7 +226,6 @@ const Dashboard: React.FC<DashboardProps> = ({
               </div>
               
               <div className="space-y-1">
-                 {/* Admin or User Ad Management */}
                  {user?.isAdmin ? (
                      <button onClick={onShowAdManagement} className="w-full text-right px-3 py-2 rounded-lg hover:bg-yellow-50 text-yellow-700 text-sm font-medium flex items-center justify-between transition-colors">
                         <span>בקשות פרסום ({pendingAdsCount})</span>
@@ -264,7 +264,6 @@ const Dashboard: React.FC<DashboardProps> = ({
         </div>
       </div>
 
-      {/* Top Right Controls */}
       <div className="fixed top-6 right-6 flex items-center gap-3 z-50">
         <AccessibilityManager positionClass="relative" buttonClass="bg-white/20 hover:bg-white/30" />
         
@@ -282,7 +281,6 @@ const Dashboard: React.FC<DashboardProps> = ({
         </button>
       </div>
 
-      {/* Header */}
       <header className="w-full max-w-6xl flex justify-center py-8 fade-in-up" style={{ animationDelay: '0.1s' }}>
         <div className="text-center">
           <h1 className="text-7xl font-black text-white drop-shadow-lg tracking-wide">AIVAN</h1>
@@ -290,7 +288,6 @@ const Dashboard: React.FC<DashboardProps> = ({
         </div>
       </header>
 
-      {/* Main Input */}
       <div className="w-full max-w-4xl mt-10 fade-in-up z-40" style={{ animationDelay: '0.2s' }}>
         <div className="bg-white/20 backdrop-blur-xl rounded-3xl shadow-2xl p-2 border border-white/30 relative">
           
@@ -369,22 +366,25 @@ const Dashboard: React.FC<DashboardProps> = ({
       </div>
 
       <div className="w-full max-w-3xl mt-12 fade-in-up z-0" style={{ animationDelay: '0.4s' }}>
-        <h3 className="text-white font-bold text-lg mb-4 px-2 opacity-90">היסטוריה אחרונה</h3>
+        <h3 className="text-white font-bold text-lg mb-4 px-2 opacity-90">היסטוריה אחרונה (לחץ לפתיחת פרויקט)</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {history.length === 0 ? (
+          {savedProjects.length === 0 ? (
             <div className="text-white/50 text-center col-span-2 py-8">אין היסטוריה עדיין. התחל ליצור!</div>
           ) : (
-            history.slice(0, 4).map((item, idx) => (
+            savedProjects.slice(0, 4).map((project) => (
               <div 
-                key={idx} 
-                onClick={() => onStartProject({ prompt: item, language: 'HTML/CSS/JS', model: model, chatMode: ChatMode.CREATOR })}
+                key={project.id} 
+                onClick={() => onOpenProject(project)}
                 className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/10 text-white hover:bg-white/20 hover:scale-[1.02] transition-all cursor-pointer shadow-sm active:scale-95"
               >
                 <div className="flex items-center justify-between">
-                  <p className="truncate w-full font-medium">{item}</p>
-                  <i className="fas fa-arrow-left opacity-0 group-hover:opacity-100 transition-opacity"></i>
+                  <p className="truncate w-full font-medium">{project.name || 'ללא שם'}</p>
+                  <i className="fas fa-folder-open opacity-0 group-hover:opacity-100 transition-opacity"></i>
                 </div>
-                <div className="text-xs text-white/60 mt-2">לחץ לשחזור שיחה</div>
+                <div className="text-xs text-white/60 mt-2 flex justify-between">
+                   <span>{new Date(project.lastModified).toLocaleDateString()}</span>
+                   <span>{project.language}</span>
+                </div>
               </div>
             ))
           )}
@@ -398,10 +398,14 @@ const Dashboard: React.FC<DashboardProps> = ({
           onClose={() => setShowSettingsModal(false)}
           onLogout={onLogout}
           onUpdateUser={onUpdateUser}
-          history={history}
+          history={savedProjects.map(p => p.name)} // Pass names for now for the list in settings
           onClearHistory={onClearHistory}
-          onDeleteHistoryItem={onDeleteHistoryItem}
-          onRenameHistoryItem={onRenameHistoryItem}
+          onDeleteHistoryItem={(index) => {
+              if (savedProjects[index]) onDeleteHistoryItem(savedProjects[index].id);
+          }}
+          onRenameHistoryItem={(index, newName) => {
+              if (savedProjects[index]) onRenameHistoryItem(savedProjects[index].id, newName);
+          }}
         />
       )}
     </div>

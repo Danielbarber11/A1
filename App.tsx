@@ -7,25 +7,64 @@ import Workspace from './components/Workspace';
 import PremiumScreen from './components/PremiumScreen';
 import AdvertiseScreen from './components/AdvertiseScreen';
 import AdManagementScreen from './components/AdManagementScreen';
-import { Screen, ProjectConfig, User, AdRequest } from './types';
+import { Screen, ProjectConfig, User, AdRequest, SavedProject, ChatMode } from './types';
 
 const App: React.FC = () => {
   const [currentScreen, setCurrentScreen] = useState<Screen>(Screen.AUTH);
   const [projectConfig, setProjectConfig] = useState<ProjectConfig | null>(null);
-  const [history, setHistory] = useState<string[]>([]);
+  
+  // Changed history from string[] to SavedProject[]
+  const [savedProjects, setSavedProjects] = useState<SavedProject[]>([]);
+  
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [adRequests, setAdRequests] = useState<AdRequest[]>([]);
 
   useEffect(() => {
-    const savedHistory = localStorage.getItem('aivan_history');
-    if (savedHistory) setHistory(JSON.parse(savedHistory));
+    // Migrate old string history to new object history if needed
+    const savedHistoryStr = localStorage.getItem('aivan_history');
+    if (savedHistoryStr) {
+        try {
+            const parsed = JSON.parse(savedHistoryStr);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+                if (typeof parsed[0] === 'string') {
+                    // MIGRATION logic: Convert string prompts to basic project objects
+                    const migratedProjects: SavedProject[] = parsed.map((prompt: string) => ({
+                        id: Date.now().toString() + Math.random().toString(),
+                        name: prompt,
+                        prompt: prompt,
+                        language: 'HTML/CSS/JS',
+                        model: 'gemini-2.5-flash',
+                        lastModified: Date.now(),
+                        code: '',
+                        creatorMessages: [],
+                        questionMessages: [],
+                        codeHistory: []
+                    }));
+                    setSavedProjects(migratedProjects);
+                    localStorage.setItem('aivan_projects', JSON.stringify(migratedProjects));
+                    localStorage.removeItem('aivan_history'); // Clean up old key
+                } else {
+                    // Already in new format (check key 'aivan_projects' below)
+                    // If we loaded from 'aivan_history' but it's objects, just set it
+                    setSavedProjects(parsed);
+                }
+            }
+        } catch (e) { console.error("History migration error", e); }
+    }
+
+    // Load from new key
+    const savedProjectsStr = localStorage.getItem('aivan_projects');
+    if (savedProjectsStr) {
+        try {
+            setSavedProjects(JSON.parse(savedProjectsStr));
+        } catch(e) { console.error("Load projects error", e); }
+    }
     
     // Load ads from system storage
     const savedAds = localStorage.getItem('aivan_ads');
     if (savedAds && JSON.parse(savedAds).length > 0) {
       setAdRequests(JSON.parse(savedAds));
     } else {
-      // Inject Default System Ads if no ads exist
       const defaultAds: AdRequest[] = [
         { id: 'sys_1', userId: 'system', userEmail: 'System', description: 'הירשמו לרשימת ההמתנה למנוי פרימיום! קבלו גישה למודלים חכמים יותר ללא הגבלה.', budget: 0, status: 'APPROVED', timestamp: Date.now(), targetUrl: '#' },
         { id: 'sys_2', userId: 'system', userEmail: 'System', description: 'רוצים לפרסם כאן? הצטרפו למערכת הפרסום של Aivan והגיעו לאלפי מפתחים.', budget: 0, status: 'APPROVED', timestamp: Date.now(), targetUrl: '#' },
@@ -35,6 +74,11 @@ const App: React.FC = () => {
       localStorage.setItem('aivan_ads', JSON.stringify(defaultAds));
     }
   }, []);
+
+  const saveProjectsToStorage = (projects: SavedProject[]) => {
+      localStorage.setItem('aivan_projects', JSON.stringify(projects));
+      setSavedProjects(projects);
+  };
 
   const handleAuthSuccess = (user: User) => {
     setCurrentUser(user);
@@ -64,59 +108,106 @@ const App: React.FC = () => {
     updateLocalStorage(updatedUser);
   };
 
+  const checkPremiumLimits = (language: string): boolean => {
+      // 1. Language Restriction
+      if (language !== 'HTML/CSS/JS' && !currentUser?.isPremium && !currentUser?.isAdmin) {
+          alert("יצירת קוד בשפות מתקדמות (Python/React/Node) זמינה למנויי פרימיום בלבד.");
+          setCurrentScreen(Screen.PREMIUM);
+          return false;
+      }
+
+      // 2. Daily Limit
+      const today = new Date().toISOString().split('T')[0];
+      const lastRequestDate = currentUser?.preferences?.lastRequestDate;
+      let dailyCount = currentUser?.preferences?.dailyRequestsCount || 0;
+
+      if (lastRequestDate !== today) dailyCount = 0;
+
+      if (!currentUser?.isPremium && !currentUser?.isAdmin && dailyCount >= 30) {
+          alert("הגעת למגבלת הבקשות היומית (30). שדרג לפרימיום להמשך עבודה ללא הגבלה!");
+          setCurrentScreen(Screen.PREMIUM);
+          return false;
+      }
+      
+      // Update usage
+      if (currentUser) {
+          const updatedUser = {
+              ...currentUser,
+              preferences: {
+                  ...currentUser.preferences!,
+                  dailyRequestsCount: dailyCount + 1,
+                  lastRequestDate: today
+              }
+          };
+          handleUpdateUser(updatedUser);
+      }
+      return true;
+  };
+
   const handleStartProject = (config: ProjectConfig) => {
     if (!currentUser) return;
+    if (!checkPremiumLimits(config.language)) return;
 
-    // --- ENFORCE PREMIUM LIMITS ---
-
-    // 1. Check Language Restriction (Only HTML allowed for Free)
-    if (config.language !== 'HTML/CSS/JS' && !currentUser.isPremium && !currentUser.isAdmin) {
-        alert("יצירת קוד בשפות מתקדמות (Python/React/Node) זמינה למנויי פרימיום בלבד.");
-        setCurrentScreen(Screen.PREMIUM);
-        return;
-    }
-
-    // 2. Check Daily Limit (30/day) for non-premium
-    const today = new Date().toISOString().split('T')[0];
-    const lastRequestDate = currentUser.preferences?.lastRequestDate;
-    let dailyCount = currentUser.preferences?.dailyRequestsCount || 0;
-
-    if (lastRequestDate !== today) {
-        dailyCount = 0; // Reset for new day
-    }
-
-    if (!currentUser.isPremium && !currentUser.isAdmin && dailyCount >= 30) {
-        alert("הגעת למגבלת הבקשות היומית (30). שדרג לפרימיום להמשך עבודה ללא הגבלה!");
-        setCurrentScreen(Screen.PREMIUM);
-        return;
-    }
-
-    // Increment and Save Usage
-    const updatedUser = {
-        ...currentUser,
-        preferences: {
-            ...currentUser.preferences,
-            dailyRequestsCount: dailyCount + 1,
-            lastRequestDate: today,
-            // Fallback for required props
-            enterToSend: currentUser.preferences?.enterToSend || false,
-            streamCode: true,
-            saveHistory: currentUser.preferences?.saveHistory ?? true
-        }
+    // Create a new project object
+    const newProject: SavedProject = {
+        id: Date.now().toString(),
+        name: config.prompt, // Prompt used as name initially
+        language: config.language,
+        model: config.model,
+        lastModified: Date.now(),
+        code: '',
+        creatorMessages: [],
+        questionMessages: [],
+        codeHistory: []
     };
-    handleUpdateUser(updatedUser);
 
-    setProjectConfig(config);
-    
-    if (updatedUser.preferences?.saveHistory) {
-      setHistory(prev => {
-          const newHistory = [config.prompt, ...prev.filter(p => p !== config.prompt)];
-          const limitedHistory = newHistory.slice(0, 20);
-          localStorage.setItem('aivan_history', JSON.stringify(limitedHistory));
-          return limitedHistory;
-      }); 
+    if (currentUser.preferences?.saveHistory) {
+        saveProjectsToStorage([newProject, ...savedProjects]);
     }
+
+    setProjectConfig({ ...config, id: newProject.id });
     setCurrentScreen(Screen.WORKSPACE);
+  };
+
+  const handleOpenProject = (project: SavedProject) => {
+      // Open existing project - DO NOT check limits or increment counter here, 
+      // as we are just viewing/continuing work.
+      setProjectConfig({
+          id: project.id,
+          prompt: project.name,
+          language: project.language,
+          model: project.model,
+          chatMode: ChatMode.CREATOR,
+          // PASS EXISTING STATE
+          initialCode: project.code,
+          initialCreatorMessages: project.creatorMessages,
+          initialQuestionMessages: project.questionMessages,
+          initialCodeHistory: project.codeHistory
+      });
+      setCurrentScreen(Screen.WORKSPACE);
+  };
+
+  // Called by Workspace to auto-save
+  const handleSaveProjectProgress = (id: string, code: string, creatorMessages: any[], questionMessages: any[], codeHistory: string[]) => {
+      if (!currentUser?.preferences?.saveHistory) return;
+      
+      const updatedProjects = savedProjects.map(p => {
+          if (p.id === id) {
+              return { 
+                  ...p, 
+                  code, 
+                  creatorMessages, 
+                  questionMessages, 
+                  codeHistory, 
+                  lastModified: Date.now() 
+              };
+          }
+          return p;
+      });
+      
+      // Sort by last modified
+      updatedProjects.sort((a, b) => b.lastModified - a.lastModified);
+      saveProjectsToStorage(updatedProjects);
   };
 
   const handleBackToDashboard = () => {
@@ -131,25 +222,17 @@ const App: React.FC = () => {
   };
 
   const handleClearHistory = () => {
-    setHistory([]);
-    localStorage.removeItem('aivan_history');
+    saveProjectsToStorage([]);
   };
 
-  const handleDeleteHistoryItem = (index: number) => {
-    setHistory(prev => {
-      const newHistory = prev.filter((_, i) => i !== index);
-      localStorage.setItem('aivan_history', JSON.stringify(newHistory));
-      return newHistory;
-    });
+  const handleDeleteHistoryItem = (id: string) => {
+    const newProjects = savedProjects.filter(p => p.id !== id);
+    saveProjectsToStorage(newProjects);
   };
 
-  const handleRenameHistoryItem = (index: number, newName: string) => {
-    setHistory(prev => {
-      const newHistory = [...prev];
-      if (newHistory[index]) newHistory[index] = newName;
-      localStorage.setItem('aivan_history', JSON.stringify(newHistory));
-      return newHistory;
-    });
+  const handleRenameHistoryItem = (id: string, newName: string) => {
+    const newProjects = savedProjects.map(p => p.id === id ? { ...p, name: newName } : p);
+    saveProjectsToStorage(newProjects);
   };
 
   // --- AD SYSTEM LOGIC ---
@@ -181,7 +264,6 @@ const App: React.FC = () => {
       localStorage.setItem('aivan_ads', JSON.stringify(updatedAds));
   };
 
-  // --- ACTIVATE AD SUPPORTED PREMIUM ---
   const handleActivateAdSupportedPremium = () => {
       if (!currentUser) return;
       const updatedUser: User = { 
@@ -209,8 +291,10 @@ const App: React.FC = () => {
       )}
       {currentScreen === Screen.HOME && (
         <Dashboard 
-          onStartProject={handleStartProject} 
-          history={history}
+          onStartProject={handleStartProject}
+          onOpenProject={handleOpenProject}
+          savedProjects={savedProjects}
+          history={savedProjects.map(p => p.name)} // legacy format for list
           onLogout={handleLogout}
           user={currentUser}
           onUpdateUser={handleUpdateUser}
@@ -239,12 +323,20 @@ const App: React.FC = () => {
       )}
       {currentScreen === Screen.WORKSPACE && projectConfig && (
         <Workspace 
+          projectId={projectConfig.id}
           initialPrompt={projectConfig.prompt}
           initialLanguage={projectConfig.language}
           initialFiles={projectConfig.files || null}
           initialChatMode={projectConfig.chatMode}
+          // Load existing state if available
+          initialCode={projectConfig.initialCode}
+          initialCreatorMessages={projectConfig.initialCreatorMessages}
+          initialQuestionMessages={projectConfig.initialQuestionMessages}
+          initialCodeHistory={projectConfig.initialCodeHistory}
+          
           modelId={projectConfig.model}
           onBack={handleBackToDashboard}
+          onSaveProject={handleSaveProjectProgress}
           user={currentUser}
           approvedAds={approvedAds}
           onActivateAdSupportedPremium={handleActivateAdSupportedPremium}

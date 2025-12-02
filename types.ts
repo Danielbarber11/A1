@@ -16,7 +16,7 @@ export enum Role {
 
 export enum SettingsTab {
   ACCOUNT = 'ACCOUNT',
-  PREMIUM = 'PREMIUM', // New Tab
+  PREMIUM = 'PREMIUM',
   INTERFACE = 'INTERFACE',
   HISTORY = 'HISTORY',
   ACCESSIBILITY = 'ACCESSIBILITY',
@@ -39,12 +39,30 @@ export interface ChatMessage {
   isError?: boolean;
 }
 
+export interface SavedProject {
+  id: string;
+  name: string; // The prompt acts as the name usually
+  language: string;
+  model: string;
+  lastModified: number;
+  code: string;
+  creatorMessages: ChatMessage[];
+  questionMessages: ChatMessage[];
+  codeHistory: string[];
+}
+
 export interface ProjectConfig {
+  id?: string; // Optional ID for existing projects
   prompt: string;
   language: string;
   model: string;
   chatMode: ChatMode;
   files?: FileList | null;
+  // For loading existing projects
+  initialCode?: string;
+  initialCreatorMessages?: ChatMessage[];
+  initialQuestionMessages?: ChatMessage[];
+  initialCodeHistory?: string[];
 }
 
 export interface GeneratedCode {
