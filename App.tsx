@@ -23,42 +23,70 @@ const App: React.FC = () => {
   useEffect(() => {
     let unsubscribeProjects: (() => void) | null = null;
 
-    const unsubscribeAuth = onAuthStateChanged(auth, async (firebaseUser) => {
-        if (firebaseUser) {
-            // User is signed in
-            const loggedUser: User = {
-                uid: firebaseUser.uid,
-                email: firebaseUser.email || "",
-                name: firebaseUser.displayName || "",
-                picture: firebaseUser.photoURL || "",
-                hasAcceptedTerms: true, // Assuming stored in DB (logic in AuthScreen handles initial save)
-            };
-            
-            // Check for admin/premium overrides (can be fetched from DB, simplified here)
-            if (loggedUser.email === 'vaxtoponline@gmail.com') {
-                loggedUser.isAdmin = true;
-                loggedUser.isPremium = true;
+    // 1. Check Local Storage First (Direct Google Login)
+    // This allows us to persist login even if Firebase Auth fails due to domain restrictions
+    const storedUserStr = localStorage.getItem('aivan_user');
+    if (storedUserStr) {
+        try {
+            const storedUser = JSON.parse(storedUserStr);
+            // Check for admin/premium overrides
+            if (storedUser.email === 'vaxtoponline@gmail.com') {
+                storedUser.isAdmin = true;
+                storedUser.isPremium = true;
             }
+            setCurrentUser(storedUser);
+            if (storedUser.hasAcceptedTerms) setCurrentScreen(Screen.HOME);
+            else setCurrentScreen(Screen.TERMS);
 
-            setCurrentUser(loggedUser);
-            if (currentScreen === Screen.AUTH) {
-                setCurrentScreen(Screen.HOME);
-            }
-
-            // --- REAL TIME SYNC START ---
+            // Start Sync
             setIsSyncing(true);
-            unsubscribeProjects = subscribeToProjects(firebaseUser.uid, (cloudProjects) => {
+            unsubscribeProjects = subscribeToProjects(storedUser.uid, (cloudProjects) => {
                 setSavedProjects(cloudProjects);
                 setIsSyncing(false);
             });
+        } catch (e) {
+            console.error("Failed to parse stored user", e);
+            localStorage.removeItem('aivan_user');
+        }
+    }
 
+    // 2. Firebase Auth Listener (Secondary / Fallback)
+    const unsubscribeAuth = onAuthStateChanged(auth, async (firebaseUser) => {
+        if (firebaseUser) {
+            // Only use Firebase Auth user if we don't already have a local custom user
+            if (!localStorage.getItem('aivan_user')) {
+                const loggedUser: User = {
+                    uid: firebaseUser.uid,
+                    email: firebaseUser.email || "",
+                    name: firebaseUser.displayName || "",
+                    picture: firebaseUser.photoURL || "",
+                    hasAcceptedTerms: true,
+                };
+                
+                if (loggedUser.email === 'vaxtoponline@gmail.com') {
+                    loggedUser.isAdmin = true;
+                    loggedUser.isPremium = true;
+                }
+
+                setCurrentUser(loggedUser);
+                setCurrentScreen(Screen.HOME);
+
+                setIsSyncing(true);
+                unsubscribeProjects = subscribeToProjects(firebaseUser.uid, (cloudProjects) => {
+                    setSavedProjects(cloudProjects);
+                    setIsSyncing(false);
+                });
+            }
         } else {
-            // User is signed out
-            setCurrentUser(null);
-            setCurrentScreen(Screen.AUTH);
-            if (unsubscribeProjects) {
-                unsubscribeProjects();
-                unsubscribeProjects = null;
+            // User is signed out from Firebase
+            // ONLY clear state if we don't have a custom stored user (Direct Login)
+            if (!localStorage.getItem('aivan_user')) {
+                setCurrentUser(null);
+                setCurrentScreen(Screen.AUTH);
+                if (unsubscribeProjects) {
+                    unsubscribeProjects();
+                    unsubscribeProjects = null;
+                }
             }
         }
     });
@@ -96,6 +124,11 @@ const App: React.FC = () => {
     const updatedUser = { ...currentUser, hasAcceptedTerms: true };
     setCurrentUser(updatedUser);
     
+    // Persist to local storage if using custom flow
+    if (localStorage.getItem('aivan_user')) {
+        localStorage.setItem('aivan_user', JSON.stringify(updatedUser));
+    }
+
     // Sync to Cloud
     if (currentUser.uid) {
         saveUserPreferencesToCloud(currentUser.uid, { hasAcceptedTerms: true });
@@ -105,6 +138,12 @@ const App: React.FC = () => {
 
   const handleUpdateUser = (updatedUser: User) => {
     setCurrentUser(updatedUser);
+    
+    // Persist to local storage if using custom flow
+    if (localStorage.getItem('aivan_user')) {
+        localStorage.setItem('aivan_user', JSON.stringify(updatedUser));
+    }
+
     if (updatedUser.uid) {
         saveUserPreferencesToCloud(updatedUser.uid, updatedUser);
     }
@@ -192,9 +231,6 @@ const App: React.FC = () => {
   const handleSaveProjectProgress = (id: string, code: string, creatorMessages: any[], questionMessages: any[], codeHistory: string[], name?: string) => {
       if (!currentUser?.preferences?.saveHistory) return;
       
-      // We update the local state optimistically, but the real source of truth is the Firestore listener
-      // which will trigger setSavedProjects soon after saveProjectToCloud completes.
-      
       const targetProject = savedProjects.find(p => p.id === id);
       if (targetProject) {
           const updatedP: SavedProject = { 
@@ -233,8 +269,6 @@ const App: React.FC = () => {
   };
 
   const handleDeleteHistoryItem = (id: string) => {
-    // Note: Actual deletion from cloud not implemented in this snippet to allow undo or archive,
-    // but in a real app you'd call deleteDoc in firebase.ts
     const newProjects = savedProjects.filter(p => p.id !== id);
     setSavedProjects(newProjects);
   };
