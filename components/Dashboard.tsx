@@ -27,13 +27,15 @@ const AnimatedSelect = ({
   value, 
   onChange, 
   icon,
-  isLocked 
+  isLocked,
+  isPremium
 }: { 
   options: {value: string, label: string, locked?: boolean}[], 
   value: string, 
   onChange: (val: any) => void,
   icon: string,
-  isLocked?: boolean
+  isLocked?: boolean,
+  isPremium?: boolean
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const selectedOption = options.find(o => o.value === value);
@@ -63,16 +65,18 @@ const AnimatedSelect = ({
     }, 5000);
   };
 
+  const premiumClass = isPremium ? "premium-border" : "border border-white/20";
+
   return (
     <div 
       ref={containerRef}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
-      className={`relative transition-all duration-300 ease-out bg-white/10 backdrop-blur-md border border-white/20 rounded-xl cursor-pointer hover:bg-white/20 z-20 h-[42px] hover:scale-105`}
+      className={`relative transition-all duration-300 ease-out bg-white/10 backdrop-blur-md rounded-xl cursor-pointer hover:bg-white/20 z-20 h-[42px] hover:scale-105 ${premiumClass}`}
       style={{ minWidth: '180px' }}
       onClick={() => setIsOpen(!isOpen)}
     >
-      <div className="flex items-center justify-between px-3 py-2 h-full text-white">
+      <div className="flex items-center justify-between px-3 py-2 h-full text-white relative z-10">
         <div className="flex items-center gap-2">
           <i className={`fas ${icon}`}></i>
           <span className="text-sm font-medium truncate">{selectedOption?.label}</span>
@@ -177,6 +181,11 @@ const Dashboard: React.FC<DashboardProps> = ({
 
   const isPremiumUser = user?.isPremium || user?.isAdmin;
 
+  // Premium styles logic
+  const profileButtonClass = isPremiumUser 
+      ? "premium-border w-12 h-12 rounded-full flex items-center justify-center text-white shadow-lg transition-transform hover:scale-110 relative bg-black/20"
+      : "w-12 h-12 rounded-full bg-white/20 hover:bg-white/30 backdrop-blur border border-white/40 flex items-center justify-center text-white shadow-lg transition-transform hover:scale-110 relative";
+
   return (
     <div className="min-h-screen w-full flex flex-col items-center animate-gradient p-4 relative">
       
@@ -198,31 +207,38 @@ const Dashboard: React.FC<DashboardProps> = ({
         <div className="relative" ref={profileDropdownRef}>
           <button 
             onClick={() => setShowProfileMenu(!showProfileMenu)}
-            className="w-12 h-12 rounded-full bg-white/20 hover:bg-white/30 backdrop-blur border border-white/40 flex items-center justify-center text-white shadow-lg transition-transform hover:scale-110 relative"
+            className={profileButtonClass}
           >
-             {user?.picture ? (
-               <img src={user.picture} alt="Profile" className="w-full h-full rounded-full object-cover" />
-             ) : (
-               <i className="fas fa-user text-xl"></i>
-             )}
+             <div className="w-full h-full rounded-full overflow-hidden relative z-10 flex items-center justify-center">
+                 {user?.picture ? (
+                   <img src={user.picture} alt="Profile" className="w-full h-full object-cover" />
+                 ) : (
+                   <i className="fas fa-user text-xl"></i>
+                 )}
+             </div>
              {user?.isAdmin && pendingAdsCount > 0 && (
-                 <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs w-5 h-5 rounded-full flex items-center justify-center animate-bounce border border-white">{pendingAdsCount}</span>
+                 <span className="absolute -top-1 -right-1 z-20 bg-red-500 text-white text-xs w-5 h-5 rounded-full flex items-center justify-center animate-bounce border border-white">{pendingAdsCount}</span>
              )}
           </button>
 
           {showProfileMenu && (
             <div className="absolute top-14 left-0 w-64 bg-white rounded-2xl shadow-2xl p-4 fade-in-up origin-top-left z-[60]">
               <div className="flex flex-col items-center border-b border-gray-100 pb-4 mb-2">
-                <div className="w-16 h-16 bg-purple-100 text-purple-600 rounded-full flex items-center justify-center text-2xl font-bold mb-2 overflow-hidden relative">
+                <div className={`w-16 h-16 rounded-full flex items-center justify-center text-2xl font-bold mb-2 overflow-hidden relative ${isPremiumUser ? 'premium-border' : 'bg-purple-100 text-purple-600'}`}>
                   {user?.picture ? (
-                    <img src={user.picture} alt="Profile" className="w-full h-full object-cover" />
+                    <img src={user.picture} alt="Profile" className="w-full h-full object-cover relative z-10" />
                   ) : (
-                    <i className="fas fa-user"></i>
+                    <i className="fas fa-user relative z-10"></i>
                   )}
-                  {user?.isAdmin && <div className="absolute bottom-0 w-full bg-black/50 text-white text-[10px] text-center">ADMIN</div>}
+                  {user?.isAdmin && <div className="absolute bottom-0 w-full bg-black/50 text-white text-[10px] text-center z-20">ADMIN</div>}
                 </div>
                 <span className="font-bold text-gray-800">{user?.name || 'משתמש'}</span>
                 <span className="text-xs text-gray-500 truncate w-full text-center">{user?.email}</span>
+                {isPremiumUser && (
+                     <span className="mt-1 text-[10px] bg-gradient-to-r from-purple-500 to-pink-500 text-white px-2 py-0.5 rounded-full font-bold shadow-sm">
+                         PREMIUM MEMBER
+                     </span>
+                )}
               </div>
               
               <div className="space-y-1">
@@ -325,6 +341,7 @@ const Dashboard: React.FC<DashboardProps> = ({
                 icon="fa-code"
                 value={language}
                 onChange={setLanguage}
+                isPremium={isPremiumUser}
                 options={[
                   { value: "HTML/CSS/JS", label: "HTML/Web" },
                   { value: "Python", label: "Python", locked: !isPremiumUser },
@@ -337,6 +354,7 @@ const Dashboard: React.FC<DashboardProps> = ({
                 icon="fa-robot"
                 value={chatMode}
                 onChange={setChatMode}
+                isPremium={isPremiumUser}
                 options={[
                   { value: ChatMode.CREATOR, label: "סוכן (יוצר)" },
                   { value: ChatMode.QUESTION, label: "שאלה" }
@@ -347,6 +365,7 @@ const Dashboard: React.FC<DashboardProps> = ({
                 icon="fa-brain"
                 value={model}
                 onChange={setModel}
+                isPremium={isPremiumUser}
                 options={[
                   { value: "gemini-2.5-flash", label: "⚡ Aivan Flash" },
                   { value: "gemini-3-pro-preview", label: "🧠 Aivan Pro (Smart)", locked: !isPremiumUser }
@@ -357,7 +376,7 @@ const Dashboard: React.FC<DashboardProps> = ({
             <button 
               onClick={handleSend}
               disabled={!prompt.trim()}
-              className="bg-white text-purple-600 w-14 h-14 rounded-full flex items-center justify-center shadow-lg hover:scale-110 disabled:opacity-50 disabled:scale-100 transition-all duration-300 z-10"
+              className={`${isPremiumUser ? 'premium-bg-anim' : 'bg-white text-purple-600'} w-14 h-14 rounded-full flex items-center justify-center shadow-lg hover:scale-110 disabled:opacity-50 disabled:scale-100 transition-all duration-300 z-10 ${isPremiumUser ? 'text-white' : ''}`}
             >
               <i className="fas fa-paper-plane text-2xl transform translate-x-[-2px] translate-y-[2px]"></i>
             </button>
@@ -365,30 +384,32 @@ const Dashboard: React.FC<DashboardProps> = ({
         </div>
       </div>
 
-      <div className="w-full max-w-3xl mt-12 fade-in-up z-0" style={{ animationDelay: '0.4s' }}>
-        <h3 className="text-white font-bold text-lg mb-4 px-2 opacity-90">היסטוריה אחרונה (לחץ לפתיחת פרויקט)</h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {savedProjects.length === 0 ? (
-            <div className="text-white/50 text-center col-span-2 py-8">אין היסטוריה עדיין. התחל ליצור!</div>
-          ) : (
-            savedProjects.slice(0, 4).map((project) => (
-              <div 
-                key={project.id} 
-                onClick={() => onOpenProject(project)}
-                className="bg-white/10 backdrop-blur-sm p-4 rounded-xl border border-white/10 text-white hover:bg-white/20 hover:scale-[1.02] transition-all cursor-pointer shadow-sm active:scale-95"
-              >
-                <div className="flex items-center justify-between">
-                  <p className="truncate w-full font-medium">{project.name || 'ללא שם'}</p>
-                  <i className="fas fa-folder-open opacity-0 group-hover:opacity-100 transition-opacity"></i>
-                </div>
-                <div className="text-xs text-white/60 mt-2 flex justify-between">
-                   <span>{new Date(project.lastModified).toLocaleDateString()}</span>
-                   <span>{project.language}</span>
-                </div>
-              </div>
-            ))
-          )}
-        </div>
+      {/* RECENT HISTORY CARDS */}
+      <div className="w-full max-w-4xl mt-6 fade-in-up z-30" style={{ animationDelay: '0.3s' }}>
+         <h3 className="text-white text-sm font-bold mb-3 pr-2 flex items-center gap-2 opacity-80">
+            <i className="fas fa-history"></i> המשך מאיפה שעצרת
+         </h3>
+         <div className="flex flex-wrap gap-3">
+            {savedProjects.length === 0 ? (
+               <div className="w-full text-white/40 text-sm bg-white/5 rounded-xl p-4 border border-dashed border-white/10">
+                   אין פרויקטים אחרונים. התחל צ'אט חדש למעלה!
+               </div>
+            ) : (
+                savedProjects.slice(0, 6).map((project) => (
+                    <button
+                        key={project.id}
+                        onClick={() => onOpenProject(project)}
+                        className="bg-white/10 hover:bg-white/20 backdrop-blur-sm border border-white/20 rounded-xl px-4 py-3 text-white text-right transition-all transform hover:scale-105 hover:shadow-lg flex flex-col gap-1 min-w-[140px] max-w-[200px]"
+                    >
+                        <span className="font-bold text-sm truncate w-full block">{project.name || 'פרויקט ללא שם'}</span>
+                        <div className="flex items-center justify-between w-full text-[10px] text-white/60">
+                             <span>{new Date(project.lastModified).toLocaleDateString()}</span>
+                             <i className="fas fa-arrow-left opacity-0 group-hover:opacity-100"></i>
+                        </div>
+                    </button>
+                ))
+            )}
+         </div>
       </div>
 
       {showSettingsModal && (

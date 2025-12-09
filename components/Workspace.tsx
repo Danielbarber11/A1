@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { ChatMessage, Role, ChatMode, User, AdRequest } from '../types';
-import { sendMessageToGeminiStream } from '../services/geminiService';
+import { sendMessageToGeminiStream, generateProjectTitle } from '../services/geminiService';
 import AccessibilityManager from './AccessibilityManager';
 
 interface WorkspaceProps {
@@ -17,11 +17,13 @@ interface WorkspaceProps {
   
   modelId: string;
   onBack: () => void;
-  onSaveProject: (id: string, code: string, creatorMessages: ChatMessage[], questionMessages: ChatMessage[], codeHistory: string[]) => void;
+  onSaveProject: (id: string, code: string, creatorMessages: ChatMessage[], questionMessages: ChatMessage[], codeHistory: string[], name?: string) => void;
   user: User | null;
   approvedAds?: AdRequest[];
   onActivateAdSupportedPremium: () => void;
 }
+
+type PreviewDevice = 'desktop' | 'tablet' | 'mobile';
 
 const Workspace: React.FC<WorkspaceProps> = ({ 
     projectId,
@@ -41,89 +43,136 @@ const Workspace: React.FC<WorkspaceProps> = ({
     approvedAds = [],
     onActivateAdSupportedPremium
 }) => {
+  // --- STATE ---
   const [creatorMessages, setCreatorMessages] = useState<ChatMessage[]>(initialCreatorMessages);
   const [questionMessages, setQuestionMessages] = useState<ChatMessage[]>(initialQuestionMessages);
   
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'unsaved'>('saved');
   
   const [code, setCode] = useState(initialCode);
   const [codeHistory, setCodeHistory] = useState<string[]>(initialCodeHistory);
   const [historyIndex, setHistoryIndex] = useState(initialCodeHistory.length > 0 ? initialCodeHistory.length - 1 : -1);
-  const [isEditing, setIsEditing] = useState(false);
   
   const [activeView, setActiveView] = useState<'preview' | 'code'>('preview');
+  const [previewDevice, setPreviewDevice] = useState<PreviewDevice>('desktop');
   const [chatMode, setChatMode] = useState<ChatMode>(initialChatMode);
   
-  // Current Ad for display
-  const [currentAd, setCurrentAd] = useState<AdRequest | null>(null);
+  // Rotating Ad Logic
+  const [activeAdIndex, setActiveAdIndex] = useState(0);
+  const [activeMediaIndex, setActiveMediaIndex] = useState(0);
+
+  // Construction Message Logic
+  const [constructionMsg, setConstructionMsg] = useState("מכין את סביבת העבודה...");
   
+  // Refs
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const lastMsgCount = useRef(0);
   const abortControllerRef = useRef<AbortController | null>(null);
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hasAutoNamedRef = useRef(false);
 
-  const isWebLanguage = initialLanguage === 'HTML/CSS/JS' || initialLanguage === 'React';
+  // Constants
   const currentMessages = chatMode === ChatMode.CREATOR ? creatorMessages : questionMessages;
-
   const isPremiumUser = user?.isPremium && !user?.hasAdSupportedPremium; 
   const isFreeOrAdSupported = !isPremiumUser;
 
-  // Auto-Save Logic (Debounced)
+  // --- EFFECTS ---
+
+  // 1. Init state
+  useEffect(() => {
+     setCreatorMessages(initialCreatorMessages || []);
+     setQuestionMessages(initialQuestionMessages || []);
+     setCode(initialCode || '');
+     setCodeHistory(initialCodeHistory || []);
+     setHistoryIndex(initialCodeHistory && initialCodeHistory.length > 0 ? initialCodeHistory.length - 1 : -1);
+  }, [initialCreatorMessages, initialQuestionMessages, initialCode, initialCodeHistory]);
+
+  // 2. Rotate Ads and Media
+  useEffect(() => {
+    let adInterval: ReturnType<typeof setInterval>;
+    let mediaInterval: ReturnType<typeof setInterval>;
+
+    // Rotate Ads every 15 seconds
+    if (approvedAds.length > 0) {
+        adInterval = setInterval(() => {
+            setActiveAdIndex(prev => (prev + 1) % approvedAds.length);
+            setActiveMediaIndex(0); // Reset media when ad changes
+        }, 15000);
+    }
+
+    // Rotate Media within the current ad every 3 seconds
+    mediaInterval = setInterval(() => {
+        setActiveMediaIndex(prev => prev + 1);
+    }, 3000);
+
+    return () => {
+        if (adInterval) clearInterval(adInterval);
+        if (mediaInterval) clearInterval(mediaInterval);
+    };
+  }, [approvedAds.length]);
+
+  // 3. Construction Messages Animation
+  useEffect(() => {
+    if (!isLoading) return;
+    
+    const steps = [
+        "בונה את מבנה ה-HTML...",
+        "מעצב עם CSS...",
+        "כותב לוגיקה JavaScript...",
+        "מבצע בדיקות תקינות...",
+        "מסיים בנייה..."
+    ];
+    
+    let stepIndex = 0;
+    setConstructionMsg(steps[0]);
+    
+    const msgInterval = setInterval(() => {
+        stepIndex = (stepIndex + 1) % steps.length;
+        setConstructionMsg(steps[stepIndex]);
+    }, 3000);
+
+    return () => clearInterval(msgInterval);
+  }, [isLoading]);
+
+  // 4. Auto-Name Project
+  useEffect(() => {
+    const triggerAutoName = async () => {
+        if (code && projectId && !hasAutoNamedRef.current && initialPrompt.length > 25 && (!initialCode || initialCode.length === 0)) {
+            hasAutoNamedRef.current = true;
+            try {
+                const newName = await generateProjectTitle(initialPrompt, code);
+                if (newName && newName !== initialPrompt) {
+                     onSaveProject(projectId, code, creatorMessages, questionMessages, codeHistory, newName);
+                }
+            } catch (e) {
+                console.error("Auto naming failed", e);
+            }
+        }
+    };
+    triggerAutoName();
+  }, [code, projectId, initialPrompt]);
+
+  // 5. Auto-Save
   useEffect(() => {
       if (projectId) {
+          setSaveStatus('unsaved');
           if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+          
           saveTimeoutRef.current = setTimeout(() => {
+              setSaveStatus('saving');
               onSaveProject(projectId, code, creatorMessages, questionMessages, codeHistory);
-          }, 2000); // Save after 2 seconds of inactivity
+              setTimeout(() => setSaveStatus('saved'), 500);
+          }, 2000);
       }
+      return () => { if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current); };
   }, [code, creatorMessages, questionMessages, codeHistory, projectId, onSaveProject]);
 
-  const pushNewVersion = (newCode: string) => {
-    if (!newCode) return;
-    const newHistory = codeHistory.slice(0, historyIndex + 1);
-    newHistory.push(newCode);
-    setCodeHistory(newHistory);
-    setHistoryIndex(newHistory.length - 1);
-  };
-
-  const handleUndo = () => {
-    if (historyIndex > 0) {
-       const newIndex = historyIndex - 1;
-       setHistoryIndex(newIndex);
-       setCode(codeHistory[newIndex]);
-    }
-  };
-
-  const handleRedo = () => {
-    if (historyIndex < codeHistory.length - 1) {
-       const newIndex = historyIndex + 1;
-       setHistoryIndex(newIndex);
-       setCode(codeHistory[newIndex]);
-    }
-  };
-
-  // Pick random ad logic
-  useEffect(() => {
-      // Logic for picking ads remains...
-      if ((isLoading || !code) && approvedAds.length > 0 && isFreeOrAdSupported) {
-          const randomIndex = Math.floor(Math.random() * approvedAds.length);
-          setCurrentAd(approvedAds[randomIndex]);
-      } else {
-          // Keep showing if no code, otherwise hide
-          if (code) setCurrentAd(null);
-          else if (approvedAds.length > 0 && isFreeOrAdSupported) {
-               setCurrentAd(approvedAds[Math.floor(Math.random() * approvedAds.length)]);
-          }
-      }
-  }, [isLoading, approvedAds, isFreeOrAdSupported, code]);
-
+  // 6. Initial Chat Generation
   useEffect(() => {
     const initChat = async () => {
-      // IF WE ALREADY HAVE MESSAGES OR CODE, DO NOT REGENERATE
-      if (initialCreatorMessages.length > 0 || initialCode) {
-          return; 
-      }
+      if ((initialCreatorMessages && initialCreatorMessages.length > 0) || initialCode) return;
 
       const userMsg: ChatMessage = {
         id: Date.now().toString(),
@@ -145,9 +194,9 @@ const Workspace: React.FC<WorkspaceProps> = ({
       }
     };
     initChat();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); 
+  }, []);
 
+  // 7. Scroll to bottom
   useEffect(() => {
     if (currentMessages.length > lastMsgCount.current) {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -155,26 +204,14 @@ const Workspace: React.FC<WorkspaceProps> = ({
     }
   }, [currentMessages.length, chatMode]);
 
-  const handleQuickAction = (type: 'BUGS' | 'SECURITY' | 'DEPLOY') => {
-      if (type === 'DEPLOY' && !user?.isPremium) {
-          alert("פרסום האתר לשרתים זמין למנויי פרימיום בלבד!");
-          return;
-      }
-      let prompt = "";
-      switch(type) {
-          case 'BUGS': prompt = "אנא סרוק את הקוד ומצא שגיאות."; break;
-          case 'SECURITY': prompt = "אנא הוסף שכבות אבטחה."; break;
-          case 'DEPLOY': prompt = "אנא הכן את הקוד לפרסום."; break;
-      }
-      triggerRequest(prompt);
-  };
+  // --- LOGIC ---
 
-  const handleEditToggle = () => {
-      if (!user?.isPremium) {
-          alert("עריכת קוד ידנית זמינה למנויי פרימיום בלבד! שדרג עכשיו כדי לפתוח אפשרות זו.");
-          return;
-      }
-      setIsEditing(!isEditing);
+  const pushNewVersion = (newCode: string) => {
+    if (!newCode) return;
+    const newHistory = codeHistory.slice(0, historyIndex + 1);
+    newHistory.push(newCode);
+    setCodeHistory(newHistory);
+    setHistoryIndex(newHistory.length - 1);
   };
 
   const triggerRequest = async (promptText: string) => {
@@ -196,6 +233,7 @@ const Workspace: React.FC<WorkspaceProps> = ({
 
     setInput('');
     setIsLoading(true);
+    
     abortControllerRef.current = new AbortController();
 
     const historyToUse = chatMode === ChatMode.CREATOR ? creatorMessages : questionMessages;
@@ -209,19 +247,6 @@ const Workspace: React.FC<WorkspaceProps> = ({
     }
   };
 
-  const handleStopGeneration = () => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      setIsLoading(false);
-      abortControllerRef.current = null;
-    }
-  };
-
-  const handleSendMessage = () => {
-      if (!input.trim()) return;
-      triggerRequest(input);
-  };
-
   const handleStreamingResponse = async (prompt: string, history: ChatMessage[], files: FileList | null, mode: ChatMode, currentCodeContext: string) => {
     let fullText = "";
     const botMsgId = (Date.now() + 1).toString();
@@ -231,6 +256,7 @@ const Workspace: React.FC<WorkspaceProps> = ({
 
     for await (const chunk of stream) {
       fullText += chunk;
+      
       if (isFirstChunk) {
           const newMsg = { id: botMsgId, role: Role.MODEL, text: fullText, timestamp: Date.now() };
           const updateFn = mode === ChatMode.CREATOR ? setCreatorMessages : setQuestionMessages;
@@ -245,36 +271,70 @@ const Workspace: React.FC<WorkspaceProps> = ({
           extractCode(fullText);
       }
     }
+    
+    // Final check
+    if (mode === ChatMode.CREATOR) {
+        extractCode(fullText, true);
+    }
   };
 
-  const SEPARATOR = "___AIVAN_CODE_START___";
+  const extractCode = (text: string, force: boolean = false) => {
+    if (!text) return;
 
-  const extractCode = (text: string) => {
-    const parts = text.split(SEPARATOR);
-    if (parts.length < 2) {
-         const codeBlockRegex = /```(?:\w+)?\n([\s\S]*?)```/g;
-         let match;
-         let foundCode = '';
-         while ((match = codeBlockRegex.exec(text)) !== null) foundCode += match[1] + '\n\n';
-         if (foundCode.trim()) setCode(foundCode);
-         return;
+    // 1. Look for DOCTYPE or HTML tag - The most reliable start
+    const docTypeIndex = text.search(/<!DOCTYPE html/i);
+    const htmlTagIndex = text.search(/<html/i);
+    
+    let startIndex = -1;
+    
+    if (docTypeIndex !== -1) {
+        startIndex = docTypeIndex;
+    } else if (htmlTagIndex !== -1) {
+        startIndex = htmlTagIndex;
+    }
+
+    if (startIndex !== -1) {
+        // We found the start of HTML. 
+        // We take everything from here until the end, or until we hit a markdown closing fence.
+        let extracted = text.substring(startIndex);
+        
+        // Try to remove trailing markdown block if present
+        const endBlockIndex = extracted.lastIndexOf('```');
+        if (endBlockIndex !== -1 && endBlockIndex > 10) { // arbitrary buffer
+            extracted = extracted.substring(0, endBlockIndex);
+        }
+        
+        setCode(extracted);
+        return;
+    }
+
+    // 2. Fallback: Look for Markdown block start
+    const mdBlockStart = text.match(/```html/i);
+    if (mdBlockStart && mdBlockStart.index !== undefined) {
+        let extracted = text.substring(mdBlockStart.index + mdBlockStart[0].length);
+        const endBlockIndex = extracted.lastIndexOf('```');
+        if (endBlockIndex !== -1) {
+             extracted = extracted.substring(0, endBlockIndex);
+        }
+        setCode(extracted);
+        return;
     }
     
-    const codePart = parts[1];
-    const codeBlockRegex = /```(?:\w+)?\n([\s\S]*?)```/g;
-    let match;
-    let foundCode = '';
-    while ((match = codeBlockRegex.exec(codePart)) !== null) foundCode += match[1] + '\n\n';
-    
-    const openBlockMatch = codePart.match(/```(?:\w+)?\n([\s\S]*?)$/);
-    if (openBlockMatch && !codePart.endsWith('```')) foundCode += openBlockMatch[1];
-
-    if (foundCode.trim()) setCode(foundCode);
+    // 3. Last Resort (Streaming or Raw) - If we see standard tags
+    if (text.includes('<head>') || text.includes('<body>') || text.includes('<style>')) {
+        // Likely raw HTML being streamed without DOCTYPE yet
+        // Try to clean up any preamble text
+        const firstTag = text.indexOf('<');
+        if (firstTag !== -1) {
+             setCode(text.substring(firstTag));
+        }
+    }
   };
 
   const cleanMessage = (text: string) => {
-    if (!text) return '';
-    return text.split(SEPARATOR)[0].trim();
+    // This cleans the message bubble shown to the user in chat
+    // We want to hide the massive code block
+    return text.replace(/```html[\s\S]*?```/g, '*(קוד האתר)*').replace(/<!DOCTYPE html>[\s\S]*/i, '').trim();
   };
 
   const handleDownload = () => {
@@ -293,6 +353,12 @@ const Workspace: React.FC<WorkspaceProps> = ({
     alert('הקוד הועתק ללוח!');
   };
 
+  const handleOpenInNewTab = () => {
+    const blob = new Blob([getCodeWithFooter(code)], { type: 'text/html' });
+    const url = URL.createObjectURL(blob);
+    window.open(url, '_blank');
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
@@ -300,245 +366,304 @@ const Workspace: React.FC<WorkspaceProps> = ({
     }
   };
 
-  const getCodeWithFooter = (originalCode: string) => {
-      if (!originalCode) return "";
-      
-      let footerHTML = `<footer style="width: 100%; padding: 20px; text-align: center; background: #f8f9fa; color: #6c757d; font-family: sans-serif; font-size: 12px; border-top: 1px solid #e9ecef; margin-top: auto;">`;
-      footerHTML += `נבנה בעזרת בינה מלאכותית ע"י <strong style="color: #9333ea;">AIVAN</strong>`;
-      
-      if (isFreeOrAdSupported) {
-          footerHTML += `<br/><br/><span style="font-size: 10px; color: #999;">Aivan participates in the Amazon Services LLC Associates Program. As an Amazon Associate, we earn from qualifying purchases.</span>`;
-          footerHTML += `</footer>`;
+  const handleSendMessage = () => {
+      if (!input.trim()) return;
+      triggerRequest(input);
+  };
 
-          // Placeholder Amazon Ad
-          const adHTML = `
-            <div id="aivan-amazon-ad" style="width: 100%; background: #fff; border-top: 2px solid #ff9900; padding: 15px; text-align: center; font-family: sans-serif; box-shadow: 0 -4px 10px rgba(0,0,0,0.05); margin-top: 20px;">
-                <div style="max-width: 728px; height: 90px; background: #f3f3f3; margin: 0 auto; display: flex; align-items: center; justify-content: center; border: 1px dashed #ccc; color: #666;">
-                    <span style="font-weight: bold; color: #ff9900;">Amazon</span>&nbsp;Ad Space Reserved (728x90)
+  // --- AD INJECTION ---
+  const currentAd = approvedAds.length > 0 ? approvedAds[activeAdIndex] : null;
+  // Get current media to display for this ad
+  const currentAdMedia = currentAd && currentAd.mediaFiles && currentAd.mediaFiles.length > 0 
+      ? currentAd.mediaFiles[activeMediaIndex % currentAd.mediaFiles.length] 
+      : null;
+
+  const getCodeWithFooter = (originalCode: string) => {
+      if (!originalCode || originalCode.trim().length < 10) return originalCode;
+      
+      let modifiedCode = originalCode;
+      
+      // Inject Ad only for free users
+      if (isFreeOrAdSupported && currentAd) {
+          const adMediaHTML = currentAdMedia && currentAdMedia.type === 'image'
+              ? `<img src="${currentAdMedia.data}" style="width: 50px; height: 50px; border-radius: 8px; object-fit: cover; border: 1px solid #eee;" alt="Ad" />`
+              : `<div style="width: 50px; height: 50px; background: #000; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 10px;">VIDEO</div>`;
+
+          const amazonAdHTML = `
+            <div id="aivan-sticky-ad" style="
+                position: fixed;
+                bottom: 20px;
+                right: 20px;
+                background: rgba(255, 255, 255, 0.95);
+                backdrop-filter: blur(10px);
+                border: 1px solid #e5e7eb;
+                box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1);
+                border-radius: 16px;
+                padding: 12px;
+                z-index: 2147483647;
+                font-family: system-ui, -apple-system, sans-serif;
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                max-width: 320px;
+                animation: slideUp 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+                direction: rtl;
+                transition: all 0.3s ease;
+            ">
+                <style>
+                    @keyframes slideUp {
+                        from { transform: translateY(100px); opacity: 0; }
+                        to { transform: translateY(0); opacity: 1; }
+                    }
+                    #aivan-sticky-ad:hover { transform: translateY(-5px); box-shadow: 0 15px 30px -5px rgba(0,0,0,0.15); }
+                </style>
+                ${adMediaHTML}
+                <div style="flex: 1;">
+                    <div style="font-size: 10px; color: #6b7280; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; display: flex; justify-content: space-between;">
+                       <span>בחסות</span>
+                       <span style="color: #9ca3af; font-weight: normal;">${activeAdIndex + 1}/${approvedAds.length}</span>
+                    </div>
+                    <div style="font-size: 12px; font-weight: 800; color: #111827; margin-bottom: 4px; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">
+                        ${currentAd.description}
+                    </div>
+                    ${currentAd.targetUrl ? `<a href="${currentAd.targetUrl}" target="_blank" rel="sponsored nofollow" style="color: #7c3aed; text-decoration: none; font-size: 11px; font-weight: 800; display: inline-flex; items-center: center; gap: 4px;">לפרטים נוספים <span style="font-size: 14px;">›</span></a>` : ''}
                 </div>
+                <button onclick="document.getElementById('aivan-sticky-ad').style.display='none'" style="position: absolute; top: -8px; left: -8px; border: none; background: #ef4444; color: white; width: 20px; height: 20px; border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">&times;</button>
             </div>
           `;
-          
-          let modifiedCode = originalCode;
-          modifiedCode = modifiedCode.includes('</body>') 
-              ? modifiedCode.replace('</body>', `${adHTML}${footerHTML}</body>`) 
-              : modifiedCode + adHTML + footerHTML;
-          return modifiedCode;
-      } else {
-          footerHTML += `</footer>`;
-          return originalCode.includes('</body>') 
-              ? originalCode.replace('</body>', `${footerHTML}</body>`) 
-              : originalCode + footerHTML;
+
+          // Ensure we append safely - prefer before body end, else just append
+          if (modifiedCode.includes('</body>')) {
+              modifiedCode = modifiedCode.replace('</body>', `${amazonAdHTML}</body>`);
+          } else {
+              modifiedCode += amazonAdHTML;
+          }
       }
+
+      return modifiedCode;
   };
 
   return (
-    <div className="flex h-screen w-full bg-white overflow-hidden fade-in-up text-gray-900 font-sans relative">
-      <div className="flex-1 flex flex-col min-w-0 h-full relative">
-         <header className="h-16 bg-white border-b border-gray-200 flex items-center justify-between px-4 relative flex-shrink-0 z-20">
-             <div className="flex items-center gap-2 z-10">
-                <button onClick={onBack} className="w-10 h-10 rounded-full bg-gray-50 hover:bg-gray-100 text-gray-600 flex items-center justify-center transition-colors shadow-sm border border-gray-200"><i className="fas fa-arrow-right text-lg"></i></button>
-                <AccessibilityManager positionClass="relative" buttonClass="bg-gray-50 hover:bg-gray-100 text-gray-600 shadow-sm border border-gray-200" />
-             </div>
-             <div className="absolute left-1/2 top-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-gray-100 p-1 rounded-full flex items-center shadow-inner w-[200px] z-0">
-                <button onClick={() => setActiveView('preview')} className={`flex-1 rounded-full py-1.5 text-xs font-bold transition-all ${activeView === 'preview' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}><i className="fas fa-desktop mr-2"></i>תצוגה</button>
-                <button onClick={() => setActiveView('code')} className={`flex-1 rounded-full py-1.5 text-xs font-bold transition-all ${activeView === 'code' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}><i className="fas fa-code mr-2"></i>קוד</button>
-             </div>
-             <div className="w-20"></div>
-         </header>
-
-         <div className="flex-1 relative bg-gray-50 overflow-hidden">
-            <div className={`absolute inset-0 w-full h-full ${activeView === 'preview' ? 'block' : 'hidden'}`}>
-                {(!code || (isLoading && !code)) ? (
-                    <div className="absolute inset-0 z-50 flex items-center justify-center bg-gray-100">
-                         <div className="border-4 border-dashed border-gray-400/30 w-[90%] h-[90%] rounded-3xl relative overflow-hidden bg-white shadow-xl flex flex-col items-center justify-center">
-                             {isFreeOrAdSupported && currentAd ? (
-                                <div className="flex flex-col h-full w-full">
-                                    <div className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-gradient-to-br from-white to-gray-50">
-                                         <span className="bg-gray-100 text-gray-500 text-[10px] font-bold px-2 py-1 rounded mb-6 tracking-widest uppercase">פרסומת</span>
-                                         <h2 className="text-3xl font-black text-gray-900 mb-6 leading-tight max-w-2xl">{currentAd.description}</h2>
-                                         
-                                         {currentAd.mediaName && (
-                                            <div className="mb-8 w-full max-w-md h-48 bg-gray-200 rounded-xl flex items-center justify-center text-gray-400">
-                                                <i className="fas fa-image text-4xl"></i>
-                                            </div>
-                                         )}
-
-                                         {currentAd.targetUrl && (
-                                             <a 
-                                                href={currentAd.targetUrl} 
-                                                target="_blank" 
-                                                rel="noopener noreferrer"
-                                                className="px-8 py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-full shadow-lg transform hover:scale-105 transition-all flex items-center gap-2"
-                                             >
-                                                 לפרטים נוספים <i className="fas fa-arrow-left"></i>
-                                             </a>
-                                         )}
-                                    </div>
-                                    <div className="h-12 bg-white border-t border-gray-100 flex items-center justify-center text-xs text-gray-400">
-                                        בחסות Aivan Ads
-                                    </div>
-                                </div>
-                             ) : isFreeOrAdSupported ? (
-                                <div className="text-center">
-                                    <h2 className="text-4xl font-black text-gray-300 uppercase tracking-widest text-center">שטח פרסום<br/>שמור</h2>
-                                    <p className="text-xs text-gray-400 mt-2">הצטרף לפרימיום להסרת פרסומות</p>
-                                </div>
-                             ) : (
-                                <div className="text-center text-gray-400">
-                                    <i className="fas fa-magic text-4xl mb-4 text-purple-200"></i>
-                                    <p className="font-bold text-gray-300">Aivan Premium - No Ads</p>
-                                </div>
-                             )}
-                             
-                             {isLoading && (
-                               <div className="absolute bottom-20 flex flex-col items-center z-20 bg-white/80 backdrop-blur px-6 py-4 rounded-2xl shadow-sm border border-white">
-                                   <div className="loader w-8 h-8 border-3 border-purple-200 border-top-purple-600 mb-2"></div>
-                                   <p className="text-xs font-bold text-gray-600">בונה את האתר...</p>
-                               </div>
-                             )}
-                         </div>
-                    </div>
-                ) : !isWebLanguage ? (
-                    <div className="absolute inset-0 z-40 flex items-center justify-center bg-gray-100">
-                         <div className="text-center">
-                             <i className="fas fa-eye-slash text-4xl text-gray-400 mb-4"></i>
-                             <h2 className="text-2xl font-bold text-gray-600">תצוגה מקדימה לא זמינה</h2>
-                             <p className="text-gray-400 mt-2">השפה שנבחרה אינה תומכת בתצוגה מקדימה בדפדפן.</p>
-                         </div>
-                    </div>
-                ) : (
-                    <iframe title="Preview" srcDoc={getCodeWithFooter(code)} className="w-full h-full border-none bg-white" sandbox="allow-scripts allow-modals allow-forms allow-same-origin" />
-                )}
-            </div>
-
-            <div className={`absolute inset-0 w-full h-full bg-white flex flex-col ${activeView === 'code' ? 'flex' : 'hidden'}`}>
-                {!isLoading && (
-                  <div className="h-16 bg-gray-50 border-b border-gray-200 flex items-center px-4 flex-shrink-0 relative overflow-x-auto no-scrollbar slide-in-right">
-                      <div className="mx-auto bg-white border border-gray-300 rounded-full flex items-center p-1.5 shadow-sm gap-1 whitespace-nowrap min-w-max">
-                          {codeHistory.length > 1 && (
-                            <>
-                              <div className="flex items-center gap-1">
-                                  <button onClick={handleUndo} disabled={historyIndex <= 0} className="w-8 h-8 rounded-full flex items-center justify-center hover:bg-gray-100 disabled:opacity-30"><i className="fas fa-arrow-right"></i></button>
-                                  <span className="px-3 py-1.5 rounded-full text-xs font-bold bg-gray-100 text-gray-700 cursor-default">גרסה {historyIndex + 1}</span>
-                                  <button onClick={handleRedo} disabled={historyIndex >= codeHistory.length - 1} className="w-8 h-8 rounded-full flex items-center justify-center hover:bg-gray-100 disabled:opacity-30"><i className="fas fa-arrow-left"></i></button>
-                              </div>
-                              <div className="w-px h-5 bg-gray-300 mx-2"></div>
-                            </>
-                          )}
-                          <div className="flex items-center gap-1">
-                              <button onClick={() => handleQuickAction('BUGS')} className="px-3 py-1.5 rounded-full text-xs font-medium hover:bg-red-50 text-red-600"><i className="fas fa-bug"></i> תיקון</button>
-                              <button onClick={() => handleQuickAction('SECURITY')} className="px-3 py-1.5 rounded-full text-xs font-medium hover:bg-blue-50 text-blue-600"><i className="fas fa-shield-alt"></i> אבטחה</button>
-                              <button 
-                                onClick={() => handleQuickAction('DEPLOY')} 
-                                className={`px-3 py-1.5 rounded-full text-xs font-medium ${isPremiumUser ? 'hover:bg-green-50 text-green-600' : 'opacity-50 cursor-not-allowed text-gray-400'}`}
-                              >
-                                  <i className="fas fa-cloud-upload-alt"></i> פרסום { !isPremiumUser && <i className="fas fa-lock ml-1 text-[10px]"></i> }
-                              </button>
-                          </div>
-                          <div className="w-px h-5 bg-gray-300 mx-2"></div>
-                          <div className="flex items-center gap-1">
-                              <button 
-                                onClick={handleEditToggle} 
-                                className={`px-3 py-1.5 rounded-full text-xs font-medium flex items-center gap-1 ${
-                                    isEditing ? 'bg-purple-600 text-white' : 
-                                    (isPremiumUser ? 'hover:bg-gray-100 text-gray-700' : 'opacity-50 text-gray-400')
-                                }`}
-                              >
-                                  <i className={`fas ${isEditing ? 'fa-save' : 'fa-edit'}`}></i> {isEditing ? 'שמור' : 'ערוך'}
-                                  {!isPremiumUser && <i className="fas fa-lock text-[10px]"></i>}
-                              </button>
-                              
-                              <button onClick={handleCopy} className="w-8 h-8 rounded-full flex items-center justify-center hover:bg-gray-100 text-gray-600"><i className="fas fa-copy"></i></button>
-                              <button onClick={handleDownload} className="w-8 h-8 rounded-full flex items-center justify-center hover:bg-gray-100 text-gray-600"><i className="fas fa-download"></i></button>
-                          </div>
-                      </div>
+    <div className="flex h-screen w-full bg-gray-50 overflow-hidden fade-in-up text-gray-900 font-sans relative">
+      
+      {/* --- HEADER --- */}
+      <div className="w-full h-16 bg-white border-b border-gray-200 flex items-center justify-between px-4 fixed top-0 left-0 right-0 z-50">
+           <div className="flex items-center gap-3">
+              <button onClick={onBack} className="w-10 h-10 rounded-full bg-gray-50 hover:bg-gray-100 text-gray-600 flex items-center justify-center transition-colors border border-gray-200" title="חזור לדאשבורד">
+                  <i className="fas fa-arrow-right"></i>
+              </button>
+              
+              <div className="flex flex-col">
+                  <span className="font-bold text-gray-800 text-sm">{projectId ? 'עורך האתר' : 'פרויקט חדש'}</span>
+                  <div className="flex items-center gap-2">
+                    <span className={`w-2 h-2 rounded-full ${saveStatus === 'saved' ? 'bg-green-500' : saveStatus === 'saving' ? 'bg-yellow-500' : 'bg-gray-300'}`}></span>
+                    <span className="text-[10px] text-gray-400">{saveStatus === 'saved' ? 'נשמר' : saveStatus === 'saving' ? 'שומר...' : 'לא נשמר'}</span>
                   </div>
-                )}
-                <div className="flex-1 overflow-auto p-4" dir="ltr">
-                   {isEditing ? (
-                       <textarea value={code} onChange={(e) => setCode(e.target.value)} className="w-full h-full font-mono text-sm p-4 outline-none resize-none bg-gray-50 rounded-xl border" />
-                   ) : (
-                       <pre className="font-mono text-sm text-gray-800 whitespace-pre-wrap">{code}</pre>
-                   )}
-                </div>
-            </div>
-         </div>
+              </div>
+           </div>
+
+           {/* View Toggle */}
+           <div className="bg-gray-100 p-1 rounded-lg flex items-center gap-1">
+              <button onClick={() => setActiveView('preview')} className={`px-4 py-1.5 rounded-md text-xs font-bold transition-all ${activeView === 'preview' ? 'bg-white shadow-sm text-purple-600' : 'text-gray-500 hover:text-gray-700'}`}>
+                  <i className="fas fa-eye mr-1"></i> תצוגה
+              </button>
+              <button onClick={() => setActiveView('code')} className={`px-4 py-1.5 rounded-md text-xs font-bold transition-all ${activeView === 'code' ? 'bg-white shadow-sm text-purple-600' : 'text-gray-500 hover:text-gray-700'}`}>
+                  <i className="fas fa-code mr-1"></i> קוד
+              </button>
+           </div>
+           
+           <div className="flex items-center gap-2">
+              <AccessibilityManager positionClass="relative" buttonClass="bg-gray-50 hover:bg-gray-100 border border-gray-200 text-gray-600" />
+              <button onClick={handleOpenInNewTab} className="hidden md:flex px-3 py-2 bg-purple-50 text-purple-600 rounded-lg text-xs font-bold hover:bg-purple-100 transition-colors gap-2 items-center">
+                  <i className="fas fa-external-link-alt"></i> חלון חדש
+              </button>
+           </div>
       </div>
 
-      <div className="w-[400px] border-r border-gray-200 bg-white flex flex-col h-full flex-shrink-0 z-30 shadow-xl">
-         <header className="h-16 flex items-center justify-center border-b border-gray-100 relative">
-             <div className="flex flex-col items-center">
-                 <span className="text-[10px] font-black text-gray-400 tracking-[0.2em] uppercase">AIVAN</span>
-                 <div className="bg-gray-100 p-1 rounded-full flex items-center gap-1">
-                     <button onClick={() => setChatMode(ChatMode.CREATOR)} className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all ${chatMode === ChatMode.CREATOR ? 'bg-white text-purple-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}>סוכן</button>
-                     <div className="w-px h-3 bg-gray-300"></div>
-                     <button onClick={() => setChatMode(ChatMode.QUESTION)} className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all ${chatMode === ChatMode.QUESTION ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}>שאלה</button>
-                 </div>
-             </div>
-         </header>
-
-         <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50/50">
-            {currentMessages.map((msg, idx) => {
-               const displayText = cleanMessage(msg.text);
-               const isEmpty = !displayText.trim();
-
-               return (
-                  <div key={msg.id || idx} className={`flex ${msg.role === Role.USER ? 'justify-start' : 'justify-end'}`}>
-                    <div className={`max-w-[85%] rounded-2xl px-5 py-3 shadow-sm text-sm leading-relaxed ${
-                        msg.role === Role.USER 
-                            ? 'bg-gradient-to-br from-purple-600 to-indigo-600 text-white rounded-tr-none' 
-                            : 'bg-white border border-gray-200 text-gray-800 rounded-tl-none'
-                    }`}>
-                       {isEmpty && msg.role === Role.MODEL ? (
-                           <div className="flex items-center gap-2 text-green-600 font-bold bg-green-50 px-2 py-1 rounded">
-                               <i className="fas fa-check-circle"></i> הקוד עודכן בהצלחה
-                           </div>
-                       ) : (
-                           displayText
-                       )}
-                    </div>
-                  </div>
-               );
-            })}
+      {/* --- MAIN CONTENT --- */}
+      <div className="flex flex-1 pt-16 w-full h-full relative">
+         
+         {/* LEFT PANEL: WORKSPACE (PREVIEW / CODE) */}
+         <div className="flex-1 relative bg-gray-100/50 flex flex-col items-center justify-center overflow-hidden">
             
-            {isLoading && (
-               <div className="flex justify-end">
-                  <div className="bg-white border border-gray-200 px-4 py-2 rounded-2xl rounded-tl-none text-xs text-gray-400 flex items-center gap-2 shadow-sm">
-                      <div className="loader w-4 h-4 border-2 border-gray-300 border-top-purple-600"></div>
-                      <span>אייבן חושב...</span>
-                  </div>
-               </div>
+            {/* DEVICE TOGGLE BAR (Only visible in Preview) */}
+            {activeView === 'preview' && (
+                <div className="absolute top-4 z-40 bg-white/80 backdrop-blur shadow-sm border border-gray-200 rounded-full p-1 flex gap-1 transform transition-transform hover:scale-105">
+                    <button 
+                        onClick={() => setPreviewDevice('desktop')}
+                        className={`w-10 h-10 rounded-full flex items-center justify-center transition-all ${previewDevice === 'desktop' ? 'bg-gray-900 text-white shadow' : 'text-gray-500 hover:bg-gray-100'}`}
+                        title="מחשב"
+                    >
+                        <i className="fas fa-desktop"></i>
+                    </button>
+                    <button 
+                        onClick={() => setPreviewDevice('tablet')}
+                        className={`w-10 h-10 rounded-full flex items-center justify-center transition-all ${previewDevice === 'tablet' ? 'bg-gray-900 text-white shadow' : 'text-gray-500 hover:bg-gray-100'}`}
+                        title="טאבלט"
+                    >
+                        <i className="fas fa-tablet-alt"></i>
+                    </button>
+                    <button 
+                        onClick={() => setPreviewDevice('mobile')}
+                        className={`w-10 h-10 rounded-full flex items-center justify-center transition-all ${previewDevice === 'mobile' ? 'bg-gray-900 text-white shadow' : 'text-gray-500 hover:bg-gray-100'}`}
+                        title="מובייל"
+                    >
+                        <i className="fas fa-mobile-alt"></i>
+                    </button>
+                </div>
             )}
-            <div ref={messagesEndRef} />
+
+            {/* PREVIEW CONTAINER */}
+            {activeView === 'preview' && (
+                <div className={`transition-all duration-500 ease-in-out relative shadow-2xl bg-white border-8 border-gray-800 rounded-3xl overflow-hidden mt-8 mb-4 flex items-center justify-center
+                    ${previewDevice === 'desktop' ? 'w-[95%] h-[85%] rounded-md border-4' : ''}
+                    ${previewDevice === 'tablet' ? 'w-[768px] h-[80%] rounded-[2rem]' : ''}
+                    ${previewDevice === 'mobile' ? 'w-[375px] h-[80%] rounded-[3rem]' : ''}
+                `}>
+                    
+                    {/* Minimal Loading Indicator (Bottom Left) - NON BLOCKING */}
+                    {isLoading && (
+                         <div className="absolute bottom-4 left-4 z-50 bg-black/80 backdrop-blur-md text-white px-4 py-2 rounded-full text-xs font-bold flex items-center gap-2 animate-pulse shadow-lg pointer-events-none">
+                             <div className="w-2 h-2 bg-green-400 rounded-full"></div>
+                             {constructionMsg}
+                         </div>
+                    )}
+
+                    {!code ? (
+                        <div className="w-full h-full flex flex-col items-center justify-center bg-gray-50 relative overflow-hidden">
+                            <div className="w-20 h-20 bg-gray-200 rounded-full flex items-center justify-center mb-4">
+                                <i className="fas fa-paint-brush text-3xl text-gray-400"></i>
+                            </div>
+                            <h3 className="text-xl font-bold text-gray-400">הקנבס ריק...</h3>
+                            <p className="text-gray-400 mt-2">האתר יופיע כאן ברגע שהבוט יתחיל לכתוב</p>
+                        </div>
+                    ) : (
+                        <iframe 
+                            title="Live Preview" 
+                            srcDoc={getCodeWithFooter(code)} 
+                            className="w-full h-full bg-white"
+                            sandbox="allow-scripts allow-modals allow-forms allow-same-origin" 
+                        />
+                    )}
+                </div>
+            )}
+
+            {/* CODE EDITOR CONTAINER */}
+            {activeView === 'code' && (
+                <div className="w-full h-full p-4 relative">
+                    <div className="absolute top-6 right-8 flex gap-2 z-10">
+                        <button 
+                            onClick={handleCopy} 
+                            disabled={isLoading}
+                            className={`bg-white/90 backdrop-blur border border-gray-200 text-gray-700 px-3 py-1.5 rounded-lg text-xs font-bold shadow-sm ${isLoading ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-50'}`}
+                        >
+                            <i className="fas fa-copy mr-1"></i> העתק
+                        </button>
+                        <button 
+                            onClick={handleDownload} 
+                            disabled={isLoading}
+                            className={`bg-white/90 backdrop-blur border border-gray-200 text-gray-700 px-3 py-1.5 rounded-lg text-xs font-bold shadow-sm ${isLoading ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-50'}`}
+                        >
+                            <i className="fas fa-download mr-1"></i> הורד
+                        </button>
+                    </div>
+                    <textarea 
+                        value={code} 
+                        onChange={(e) => { setCode(e.target.value); }}
+                        readOnly={isLoading}
+                        className={`w-full h-full bg-[#1e1e1e] text-[#d4d4d4] font-mono text-sm p-6 rounded-xl shadow-inner resize-none focus:outline-none leading-relaxed ${isLoading ? 'cursor-not-allowed opacity-90' : ''}`}
+                        spellCheck={false}
+                    />
+                </div>
+            )}
+
          </div>
 
-         <div className="p-4 bg-white border-t border-gray-100">
-             <div className="relative">
-                 <textarea 
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    onKeyDown={handleKeyDown}
-                    placeholder={chatMode === ChatMode.CREATOR ? "תאר מה להוסיף או לשנות באתר..." : "שאל אותי שאלה על הקוד..."}
-                    className="w-full pl-12 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-purple-100 focus:border-purple-300 resize-none h-14 text-sm scrollbar-hide"
-                    disabled={isLoading}
-                 />
-                 <div className="absolute left-2 top-2">
+         {/* RIGHT PANEL: CHAT */}
+         <div className="w-[350px] md:w-[400px] bg-white border-r border-gray-200 flex flex-col h-full shadow-xl z-20">
+             
+             {/* Chat Tabs */}
+             <div className="p-4 border-b border-gray-100 flex justify-center">
+                 <div className="bg-gray-100 p-1 rounded-xl flex w-full">
+                     <button 
+                        onClick={() => setChatMode(ChatMode.CREATOR)} 
+                        className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 ${chatMode === ChatMode.CREATOR ? 'bg-white text-purple-600 shadow-sm' : 'text-gray-500 hover:bg-gray-200'}`}
+                     >
+                         <i className="fas fa-magic"></i> יוצר (Builder)
+                     </button>
+                     <button 
+                        onClick={() => setChatMode(ChatMode.QUESTION)} 
+                        className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 ${chatMode === ChatMode.QUESTION ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:bg-gray-200'}`}
+                     >
+                         <i className="fas fa-comment-dots"></i> צ'אט (Chat)
+                     </button>
+                 </div>
+             </div>
+
+             {/* Messages Area */}
+             <div className="flex-1 overflow-y-auto p-4 space-y-6 bg-slate-50">
+                 {currentMessages.map((msg, idx) => {
+                     const isUser = msg.role === Role.USER;
+                     const text = cleanMessage(msg.text);
+                     if (!text) return null;
+
+                     return (
+                         <div key={msg.id || idx} className={`flex w-full ${isUser ? 'justify-start' : 'justify-end'}`}>
+                             <div className={`flex flex-col max-w-[90%] ${isUser ? 'items-start' : 'items-end'}`}>
+                                 <span className="text-[10px] text-gray-400 mb-1 px-1">{isUser ? 'אתה' : 'Aivan'}</span>
+                                 <div className={`px-4 py-3 rounded-2xl text-sm leading-relaxed shadow-sm whitespace-pre-wrap ${
+                                     isUser 
+                                        ? 'bg-gray-900 text-white rounded-tl-none' 
+                                        : 'bg-white border border-gray-200 text-gray-800 rounded-tr-none'
+                                 }`}>
+                                     {text}
+                                 </div>
+                             </div>
+                         </div>
+                     );
+                 })}
+                 
+                 {isLoading && (
+                     <div className="flex justify-end w-full">
+                         <div className="bg-white border border-gray-200 px-4 py-3 rounded-2xl rounded-tr-none shadow-sm flex items-center gap-3">
+                             <div className="flex gap-1">
+                                 <div className="w-2 h-2 bg-purple-500 rounded-full animate-bounce"></div>
+                                 <div className="w-2 h-2 bg-purple-500 rounded-full animate-bounce" style={{animationDelay: '0.1s'}}></div>
+                                 <div className="w-2 h-2 bg-purple-500 rounded-full animate-bounce" style={{animationDelay: '0.2s'}}></div>
+                             </div>
+                             <span className="text-xs text-gray-500 font-medium">בונה את האתר...</span>
+                         </div>
+                     </div>
+                 )}
+                 <div ref={messagesEndRef} />
+             </div>
+
+             {/* Input Area */}
+             <div className="p-4 bg-white border-t border-gray-100">
+                 <div className="relative flex items-end gap-2 bg-gray-50 p-2 rounded-2xl border border-gray-200 focus-within:ring-2 focus-within:ring-purple-100 focus-within:border-purple-300 transition-all">
+                     <textarea 
+                         value={input}
+                         onChange={(e) => setInput(e.target.value)}
+                         onKeyDown={handleKeyDown}
+                         placeholder={chatMode === ChatMode.CREATOR ? "תאר שינויים או תוספות לאתר..." : "שאל שאלה על הקוד..."}
+                         className="flex-1 bg-transparent border-none focus:ring-0 resize-none max-h-32 min-h-[44px] py-2.5 px-2 text-sm text-gray-800 scrollbar-hide"
+                         rows={1}
+                     />
+                     
                      {isLoading ? (
-                         <button onClick={handleStopGeneration} className="w-10 h-10 bg-red-50 text-red-500 rounded-xl flex items-center justify-center hover:bg-red-100 transition-colors">
+                         <button onClick={() => abortControllerRef.current?.abort()} className="w-10 h-10 rounded-xl bg-red-100 text-red-500 flex items-center justify-center hover:bg-red-200 transition-colors mb-0.5">
                              <i className="fas fa-stop"></i>
                          </button>
                      ) : (
-                         <button onClick={handleSendMessage} disabled={!input.trim()} className="w-10 h-10 bg-gray-900 text-white rounded-xl flex items-center justify-center hover:bg-black transition-colors disabled:opacity-50">
-                             <i className="fas fa-arrow-up"></i>
+                         <button onClick={handleSendMessage} disabled={!input.trim()} className="w-10 h-10 rounded-xl bg-purple-600 text-white flex items-center justify-center hover:bg-purple-700 transition-colors mb-0.5 disabled:opacity-50 disabled:cursor-not-allowed shadow-md">
+                             <i className="fas fa-paper-plane"></i>
                          </button>
                      )}
                  </div>
              </div>
-             <p className="text-[10px] text-center text-gray-400 mt-2">
-                 {chatMode === ChatMode.CREATOR ? "Aivan Agent יעדכן את הקוד בזמן אמת." : "Aivan Consultant יענה לשאלותיך."}
-             </p>
+
          </div>
+
       </div>
     </div>
   );

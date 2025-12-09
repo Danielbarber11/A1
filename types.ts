@@ -41,7 +41,8 @@ export interface ChatMessage {
 
 export interface SavedProject {
   id: string;
-  name: string; // The prompt acts as the name usually
+  cloudId?: string; // For Firebase Sync
+  name: string; 
   language: string;
   model: string;
   lastModified: number;
@@ -52,13 +53,12 @@ export interface SavedProject {
 }
 
 export interface ProjectConfig {
-  id?: string; // Optional ID for existing projects
+  id?: string;
   prompt: string;
   language: string;
   model: string;
   chatMode: ChatMode;
   files?: FileList | null;
-  // For loading existing projects
   initialCode?: string;
   initialCreatorMessages?: ChatMessage[];
   initialQuestionMessages?: ChatMessage[];
@@ -83,8 +83,9 @@ export interface UserPreferences {
 }
 
 export interface User {
+  uid?: string; // Firebase UID
   email: string;
-  password?: string; // Optional for Google Auth
+  password?: string; 
   name?: string;
   picture?: string;
   hasAcceptedTerms: boolean;
@@ -92,6 +93,12 @@ export interface User {
   isAdmin?: boolean;
   isPremium?: boolean;
   hasAdSupportedPremium?: boolean;
+}
+
+export interface AdMedia {
+    type: 'image' | 'video';
+    data: string; // Base64 string
+    name: string;
 }
 
 export interface AdRequest {
@@ -102,6 +109,6 @@ export interface AdRequest {
   budget: number;
   status: 'PENDING' | 'APPROVED' | 'REJECTED';
   timestamp: number;
-  mediaName?: string; // Simulation of file
+  mediaFiles: AdMedia[]; 
   targetUrl?: string;
 }

@@ -7,7 +7,6 @@ interface TermsScreenProps {
 }
 
 const TermsScreen: React.FC<TermsScreenProps> = ({ onAccept }) => {
-  const [scrolled, setScrolled] = useState(false);
   const [isAccepted, setIsAccepted] = useState(false);
 
   const handleAccept = () => {
@@ -22,56 +21,54 @@ const TermsScreen: React.FC<TermsScreenProps> = ({ onAccept }) => {
        {/* Accessibility Button - Top Right for Terms Screen */}
        <AccessibilityManager positionClass="fixed top-6 right-6" />
 
-      <div className="bg-white/95 backdrop-blur-xl rounded-2xl shadow-2xl p-8 w-full max-w-2xl fade-in-up border border-white/40">
-        <h2 className="text-3xl font-bold text-gray-800 mb-6 text-center">תנאי שימוש וכתב וויתור</h2>
+      <div className="bg-white/95 backdrop-blur-xl rounded-2xl shadow-2xl p-8 w-full max-w-3xl fade-in-up border border-white/40 flex flex-col max-h-[90vh]">
+        <h2 className="text-3xl font-black text-gray-900 mb-6 text-center border-b pb-4">תנאי שימוש ומדיניות פרטיות</h2>
         
         <div 
-          className="bg-gray-50 border rounded-lg p-6 h-64 overflow-y-auto mb-6 text-gray-700 text-sm leading-relaxed"
-          onScroll={(e) => {
-            const target = e.currentTarget;
-            if (target.scrollHeight - target.scrollTop === target.clientHeight) {
-              setScrolled(true);
-            }
-          }}
+          className="bg-gray-50 border rounded-lg p-6 overflow-y-auto mb-6 text-gray-800 text-sm leading-relaxed shadow-inner flex-1"
         >
-          <p className="font-bold mb-2">1. כללי</p>
-          <p className="mb-4">השימוש באתר "אייבן" (Aivan) מהווה הסכמה מלאה לתנאים אלו.</p>
-          
-          <p className="font-bold mb-2">2. הסרת אחריות (Waiver of Liability)</p>
+          <h3 className="font-bold text-lg mb-2 text-purple-700">1. הסכמה לשימוש</h3>
           <p className="mb-4">
-            המשתמש מצהיר ומסכים בזאת כי השימוש באתר ובקוד שנוצר על ידו הוא באחריותו הבלעדית בלבד.
-            מפעיל האתר אינו נושא בשום אחריות, ישירה או עקיפה, לכל נזק, הפסד, תקלה, באג, שגיאה, או בעיית אבטחה שתיגרם כתוצאה משימוש בקוד שנוצר באתר.
+            ברוכים הבאים לאפליקציית <strong>Aivan</strong> (להלן: "המערכת" או "האתר"). השימוש במערכת מהווה הסכמה מלאה ובלתי מסויגת לתנאים אלו.
+            המסמך מנוסח בלשון זכר מטעמי נוחות אך פונה לנשים וגברים כאחד.
           </p>
           
-          <p className="font-bold mb-2">3. פרסום ותוכניות שותפים (Affiliate Disclosure)</p>
+          <h3 className="font-bold text-lg mb-2 text-purple-700">2. גילוי נאות - תוכנית שותפים (Amazon Associates)</h3>
+          <div className="mb-4 bg-orange-50 p-4 rounded border border-orange-200 text-gray-800">
+            <strong>גילוי נאות חשוב:</strong><br/>
+            Aivan משתתפת בתוכנית השותפים של אמזון (Amazon Services LLC Associates Program), תוכנית פרסום שותפים שנועדה לספק אמצעי לאתרים להרוויח דמי פרסום על ידי פרסום וקישור ל-Amazon.com.
+            <br/><br/>
+            <strong>משמעות הדבר:</strong> המערכת עשויה להציג פרסומות, באנרים או קישורים למוצרים באתרים הנוצרים או בתוך ממשק המערכת. כל לחיצה על קישורים אלו וביצוע רכישה עשויה לזכות את מפעיל האתר בעמלה, ללא כל עלות נוספת מצדכם. הכנסות אלו מסייעות בתחזוקת הגרסה החינמית של המערכת.
+          </div>
+
+          <h3 className="font-bold text-lg mb-2 text-purple-700">3. טכנולוגיית AI והסרת אחריות (Google Gemini)</h3>
           <p className="mb-4">
-            אתר זה עושה שימוש בפרסומות ובתוכניות שותפים, לרבות אך לא רק, תוכנית השותפים של אמזון (Amazon Associates Program).
+            המערכת מבוססת על מודל השפה המלאכותי <strong>Google Gemini</strong>.
             <br/>
-            <strong>Aivan משתתף בתוכנית Amazon Services LLC Associates, תוכנית פרסום שותפים שנועדה לספק אמצעי לאתרים להרוויח דמי פרסום על ידי פרסום וקישור ל-Amazon.com.</strong>
+            <strong>הבהרה משפטית:</strong> מפעיל האתר אינו הבעלים של המודל, אינו שולט בפלטיו ואינו אחראי לתוכן הנוצר על ידו, לדיוקו, לאיכותו או להתאמתו למטרה כלשהי.
             <br/>
-            כחלק מהשירות, בעיקר בגרסה החינמית, עשויות להיות מוזרקות פרסומות לקוד התצוגה המקדימה. המשתמש מסכים לכך שפרסומות אלו הן חלק בלתי נפרד מהשירות החינמי.
+            כל שימוש בקוד, בטקסט או בתמונות שנוצרו על ידי המערכת הוא באחריות המשתמש/ת בלבד. במידה ונתקלת בבעיה הקשורה למודל עצמו או לתוכן פוגעני, האחריות חלה על ספקי הטכנולוגיה הרלוונטיים (Google).
+          </p>
+          
+          <h3 className="font-bold text-lg mb-2 text-purple-700">4. פרטיות ושמירת נתונים</h3>
+          <p className="mb-4">
+            פרטי ההתחברות (שם, כתובת אימייל) נשמרים במסד הנתונים של המערכת בשרתי Google Cloud מאובטחים, אך ורק לצורך זיהוי המשתמש, שמירת הפרויקטים האישיים וסינכרון בין מכשירים. אנו לא נמכור את המידע לצד שלישי.
           </p>
 
-          <p className="font-bold mb-2">4. קניין רוחני</p>
-          <p className="mb-4">הקוד הנוצר שייך למשתמש, בכפוף למגבלות הפרסום בגרסאות החינמיות.</p>
-
-          <p className="font-bold mb-2">5. אי תביעה</p>
-          <p className="mb-4">
-            המשתמש מוותר בזאת באופן סופי ומוחלט על כל זכות תביעה, דרישה או טענה מכל סוג שהוא כלפי מפעיל האתר, מפתחיו, או מי מטעמם.
-          </p>
-          
-          <p className="mb-4 text-red-500 font-bold">
-            בלחיצה על "מאשר", אתה מאשר כי קראת, הבנת והסכמת לכל האמור לעיל.
+          <p className="mb-4 text-gray-700 font-bold border-t pt-4 bg-gray-100 p-4 rounded-lg text-center">
+            השימוש במערכת הוא באחריותך הבלעדית.
           </p>
         </div>
 
         <div className="flex flex-col items-center justify-end gap-2">
           <button 
             onClick={handleAccept}
-            className="px-8 py-3 bg-gradient-to-r from-purple-600 to-pink-600 text-white font-bold rounded-lg shadow-md hover:shadow-xl transform hover:-translate-y-1 transition-all"
+            className="w-full md:w-auto px-12 py-4 bg-gray-900 text-white font-bold rounded-xl shadow-lg hover:shadow-2xl hover:scale-105 transition-all text-lg flex items-center justify-center gap-3 group"
           >
-            מאשר
+            <span>אני מאשר/ת את התנאים</span>
+            <i className="fas fa-check-circle text-green-400 group-hover:scale-110 transition-transform"></i>
           </button>
+          <p className="text-xs text-gray-400 mt-2">לחיצה על הכפתור מהווה חתימה אלקטרונית מחייבת.</p>
         </div>
       </div>
     </div>

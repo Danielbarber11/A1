@@ -1,13 +1,8 @@
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState } from 'react';
 import AccessibilityManager from './AccessibilityManager';
 import { User } from '../types';
-
-declare global {
-  interface Window {
-    google: any;
-  }
-}
+import { signInWithGoogle } from '../services/firebase';
 
 interface AuthScreenProps {
   onLogin: (user: User) => void;
@@ -20,89 +15,25 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin, onSignup }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
-  
-  const googleLoginRef = useRef<HTMLDivElement>(null);
-  const googleSignupRef = useRef<HTMLDivElement>(null);
+  const [isLoading, setIsLoading] = useState(false);
 
-  const initializeGoogleButton = (element: HTMLElement | null, context: 'signin' | 'signup') => {
-    if (window.google && window.google.accounts && window.google.accounts.id && element) {
-      window.google.accounts.id.initialize({
-        client_id: "1029411846084-2jidcvnmiumb0ajqdm3fcot1rvmaldr6.apps.googleusercontent.com",
-        callback: handleGoogleCallback,
-        auto_select: false,
-        cancel_on_tap_outside: true
-      });
-
-      window.google.accounts.id.renderButton(
-        element,
-        { 
-          theme: "outline", 
-          size: "large", 
-          width: element.offsetWidth, 
-          text: context === 'signup' ? "signup_with" : "signin_with", 
-          shape: "pill" 
-        }
-      );
-    }
-  };
-
-  useEffect(() => {
-    const checkGoogleLoad = setInterval(() => {
-      if (window.google?.accounts?.id) {
-        if (!isSignup) {
-           initializeGoogleButton(googleLoginRef.current, 'signin');
-        } else {
-           initializeGoogleButton(googleSignupRef.current, 'signup');
-        }
-        clearInterval(checkGoogleLoad);
-      }
-    }, 500);
-
-    return () => clearInterval(checkGoogleLoad);
-  }, [isSignup]);
-
-  const handleGoogleCallback = (response: any) => {
+  // Firebase Google Login
+  const handleGoogleLogin = async () => {
+    setIsLoading(true);
+    setError('');
     try {
-      const jwt = response.credential;
-      const base64Url = jwt.split('.')[1];
-      const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-      const jsonPayload = decodeURIComponent(atob(base64).split('').map(function(c) {
-          return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
-      }).join(''));
-      
-      const payload = JSON.parse(jsonPayload);
-      
-      const googleUserEmail = payload.email;
-      const googleUserName = payload.name;
-      const googleUserPicture = payload.picture;
-
-      const usersStr = localStorage.getItem('aivan_users');
-      const users: User[] = usersStr ? JSON.parse(usersStr) : [];
-      
-      const existingUser = users.find(u => u.email === googleUserEmail);
-
-      // Check for Admin via Google (if applicable, though usually manual)
-      const isAdmin = googleUserEmail === 'vaxtoponline@gmail.com';
-
-      if (existingUser) {
-        onLogin({ ...existingUser, isAdmin, isPremium: isAdmin ? true : existingUser.isPremium });
-      } else {
-        const newUser: User = { 
-          email: googleUserEmail, 
-          name: googleUserName, 
-          picture: googleUserPicture,
-          hasAcceptedTerms: false,
-          isAdmin,
-          isPremium: isAdmin
-        };
-        const updatedUsers = [...users, newUser];
-        localStorage.setItem('aivan_users', JSON.stringify(updatedUsers));
-        onSignup(newUser);
+      const user = await signInWithGoogle();
+      // Check for Admin Override based on email
+      if (user.email === 'vaxtoponline@gmail.com') {
+          user.isAdmin = true;
+          user.isPremium = true;
       }
-
-    } catch (e) {
-      console.error("Google Auth Error", e);
-      setError("שגיאה בהתחברות עם Google.");
+      onLogin(user);
+    } catch (err: any) {
+      console.error(err);
+      setError('שגיאה בהתחברות לגוגל. אנא נסה שוב.');
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -110,7 +41,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin, onSignup }) => {
     e.preventDefault();
     setError('');
     
-    // ADMIN HARDCODED LOGIN
+    // Legacy Local Storage / Admin Mock Login for fallback
     if (email === 'vaxtoponline@gmail.com' && password === '0101') {
         const adminUser: User = {
             email,
@@ -118,6 +49,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin, onSignup }) => {
             hasAcceptedTerms: true,
             isAdmin: true,
             isPremium: true,
+            uid: 'admin_mock_uid',
             preferences: { 
                 enterToSend: false, 
                 streamCode: true, 
@@ -129,6 +61,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin, onSignup }) => {
         return;
     }
 
+    // Standard Local Login Fallback (If Firebase fails or for testing)
     const usersStr = localStorage.getItem('aivan_users');
     const users: User[] = usersStr ? JSON.parse(usersStr) : [];
 
@@ -140,8 +73,9 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin, onSignup }) => {
       const newUser: User = { 
         email, 
         password, 
-        name: name || email.split('@')[0], // Use entered name or fallback to email prefix
-        hasAcceptedTerms: false 
+        name: name || email.split('@')[0], 
+        hasAcceptedTerms: false,
+        uid: 'local_' + Date.now()
       };
       const updatedUsers = [...users, newUser];
       localStorage.setItem('aivan_users', JSON.stringify(updatedUsers));
@@ -199,7 +133,18 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin, onSignup }) => {
                <div className="relative flex justify-center text-xs"><span className="px-2 bg-transparent text-white">או</span></div>
             </div>
             
-            <div ref={googleLoginRef} className="w-full flex justify-center h-[44px]"></div>
+            <button 
+                onClick={handleGoogleLogin} 
+                disabled={isLoading}
+                className="w-full py-2.5 rounded-xl bg-white text-gray-800 font-bold shadow-md hover:bg-gray-100 transition-colors flex items-center justify-center gap-2"
+            >
+                {isLoading ? (
+                    <div className="loader w-4 h-4 border-2 border-gray-400 border-top-purple-600"></div>
+                ) : (
+                    <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-5 h-5" alt="Google" />
+                )}
+                התחבר עם Google
+            </button>
 
             <div className="mt-4 text-center">
               <button onClick={toggleMode} className="text-white hover:text-yellow-200 underline decoration-dotted text-sm">
@@ -245,7 +190,18 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin, onSignup }) => {
                <div className="relative flex justify-center text-xs"><span className="px-2 bg-transparent text-white">או</span></div>
             </div>
 
-            <div ref={googleSignupRef} className="w-full flex justify-center h-[44px]"></div>
+            <button 
+                onClick={handleGoogleLogin} 
+                disabled={isLoading}
+                className="w-full py-2.5 rounded-xl bg-white text-gray-800 font-bold shadow-md hover:bg-gray-100 transition-colors flex items-center justify-center gap-2"
+            >
+                {isLoading ? (
+                    <div className="loader w-4 h-4 border-2 border-gray-400 border-top-purple-600"></div>
+                ) : (
+                    <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-5 h-5" alt="Google" />
+                )}
+                הירשם עם Google
+            </button>
 
             <div className="mt-4 text-center">
               <button onClick={toggleMode} className="text-white hover:text-yellow-200 underline decoration-dotted text-sm">

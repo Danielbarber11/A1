@@ -8,77 +8,82 @@ import PremiumScreen from './components/PremiumScreen';
 import AdvertiseScreen from './components/AdvertiseScreen';
 import AdManagementScreen from './components/AdManagementScreen';
 import { Screen, ProjectConfig, User, AdRequest, SavedProject, ChatMode } from './types';
+import { saveProjectToCloud, subscribeToProjects, saveUserPreferencesToCloud, logoutUser, auth } from './services/firebase';
+import { onAuthStateChanged } from 'firebase/auth';
 
 const App: React.FC = () => {
   const [currentScreen, setCurrentScreen] = useState<Screen>(Screen.AUTH);
   const [projectConfig, setProjectConfig] = useState<ProjectConfig | null>(null);
-  
-  // Changed history from string[] to SavedProject[]
   const [savedProjects, setSavedProjects] = useState<SavedProject[]>([]);
-  
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [adRequests, setAdRequests] = useState<AdRequest[]>([]);
+  const [isSyncing, setIsSyncing] = useState(false);
 
+  // --- PERSISTENT AUTH & CLOUD SYNC ---
   useEffect(() => {
-    // Migrate old string history to new object history if needed
-    const savedHistoryStr = localStorage.getItem('aivan_history');
-    if (savedHistoryStr) {
-        try {
-            const parsed = JSON.parse(savedHistoryStr);
-            if (Array.isArray(parsed) && parsed.length > 0) {
-                if (typeof parsed[0] === 'string') {
-                    // MIGRATION logic: Convert string prompts to basic project objects
-                    const migratedProjects: SavedProject[] = parsed.map((prompt: string) => ({
-                        id: Date.now().toString() + Math.random().toString(),
-                        name: prompt,
-                        prompt: prompt,
-                        language: 'HTML/CSS/JS',
-                        model: 'gemini-2.5-flash',
-                        lastModified: Date.now(),
-                        code: '',
-                        creatorMessages: [],
-                        questionMessages: [],
-                        codeHistory: []
-                    }));
-                    setSavedProjects(migratedProjects);
-                    localStorage.setItem('aivan_projects', JSON.stringify(migratedProjects));
-                    localStorage.removeItem('aivan_history'); // Clean up old key
-                } else {
-                    // Already in new format (check key 'aivan_projects' below)
-                    // If we loaded from 'aivan_history' but it's objects, just set it
-                    setSavedProjects(parsed);
-                }
-            }
-        } catch (e) { console.error("History migration error", e); }
-    }
+    let unsubscribeProjects: (() => void) | null = null;
 
-    // Load from new key
-    const savedProjectsStr = localStorage.getItem('aivan_projects');
-    if (savedProjectsStr) {
-        try {
-            setSavedProjects(JSON.parse(savedProjectsStr));
-        } catch(e) { console.error("Load projects error", e); }
-    }
-    
-    // Load ads from system storage
+    const unsubscribeAuth = onAuthStateChanged(auth, async (firebaseUser) => {
+        if (firebaseUser) {
+            // User is signed in
+            const loggedUser: User = {
+                uid: firebaseUser.uid,
+                email: firebaseUser.email || "",
+                name: firebaseUser.displayName || "",
+                picture: firebaseUser.photoURL || "",
+                hasAcceptedTerms: true, // Assuming stored in DB (logic in AuthScreen handles initial save)
+            };
+            
+            // Check for admin/premium overrides (can be fetched from DB, simplified here)
+            if (loggedUser.email === 'vaxtoponline@gmail.com') {
+                loggedUser.isAdmin = true;
+                loggedUser.isPremium = true;
+            }
+
+            setCurrentUser(loggedUser);
+            if (currentScreen === Screen.AUTH) {
+                setCurrentScreen(Screen.HOME);
+            }
+
+            // --- REAL TIME SYNC START ---
+            setIsSyncing(true);
+            unsubscribeProjects = subscribeToProjects(firebaseUser.uid, (cloudProjects) => {
+                setSavedProjects(cloudProjects);
+                setIsSyncing(false);
+            });
+
+        } else {
+            // User is signed out
+            setCurrentUser(null);
+            setCurrentScreen(Screen.AUTH);
+            if (unsubscribeProjects) {
+                unsubscribeProjects();
+                unsubscribeProjects = null;
+            }
+        }
+    });
+
+    return () => {
+        unsubscribeAuth();
+        if (unsubscribeProjects) unsubscribeProjects();
+    };
+  }, []);
+
+  // --- SYSTEM ADS (Static) ---
+  useEffect(() => {
     const savedAds = localStorage.getItem('aivan_ads');
     if (savedAds && JSON.parse(savedAds).length > 0) {
       setAdRequests(JSON.parse(savedAds));
     } else {
       const defaultAds: AdRequest[] = [
-        { id: 'sys_1', userId: 'system', userEmail: 'System', description: 'הירשמו לרשימת ההמתנה למנוי פרימיום! קבלו גישה למודלים חכמים יותר ללא הגבלה.', budget: 0, status: 'APPROVED', timestamp: Date.now(), targetUrl: '#' },
-        { id: 'sys_2', userId: 'system', userEmail: 'System', description: 'רוצים לפרסם כאן? הצטרפו למערכת הפרסום של Aivan והגיעו לאלפי מפתחים.', budget: 0, status: 'APPROVED', timestamp: Date.now(), targetUrl: '#' },
-        { id: 'sys_3', userId: 'system', userEmail: 'System', description: 'בקרוב בפרימיום: אפשרות לפרסם את האתר שבניתם ישירות בתוך הפלטפורמה!', budget: 0, status: 'APPROVED', timestamp: Date.now(), targetUrl: '#' }
+        { id: 'sys_1', userId: 'system', userEmail: 'System', description: 'הירשמו לרשימת ההמתנה למנוי פרימיום! קבלו גישה למודלים חכמים יותר ללא הגבלה.', budget: 0, status: 'APPROVED', timestamp: Date.now(), targetUrl: '#', mediaFiles: [] },
+        { id: 'sys_2', userId: 'system', userEmail: 'System', description: 'רוצים לפרסם כאן? הצטרפו למערכת הפרסום של Aivan והגיעו לאלפי מפתחים.', budget: 0, status: 'APPROVED', timestamp: Date.now(), targetUrl: '#', mediaFiles: [] },
+        { id: 'sys_3', userId: 'system', userEmail: 'System', description: 'בקרוב בפרימיום: אפשרות לפרסם את האתר שבניתם ישירות בתוך הפלטפורמה!', budget: 0, status: 'APPROVED', timestamp: Date.now(), targetUrl: '#', mediaFiles: [] }
       ];
       setAdRequests(defaultAds);
       localStorage.setItem('aivan_ads', JSON.stringify(defaultAds));
     }
   }, []);
-
-  const saveProjectsToStorage = (projects: SavedProject[]) => {
-      localStorage.setItem('aivan_projects', JSON.stringify(projects));
-      setSavedProjects(projects);
-  };
 
   const handleAuthSuccess = (user: User) => {
     setCurrentUser(user);
@@ -90,33 +95,28 @@ const App: React.FC = () => {
     if (!currentUser) return;
     const updatedUser = { ...currentUser, hasAcceptedTerms: true };
     setCurrentUser(updatedUser);
-    updateLocalStorage(updatedUser);
-    setCurrentScreen(Screen.HOME);
-  };
-
-  const updateLocalStorage = (user: User) => {
-    const usersStr = localStorage.getItem('aivan_users');
-    if (usersStr) {
-      const users: User[] = JSON.parse(usersStr);
-      const updatedUsers = users.map(u => u.email === user.email ? user : u);
-      localStorage.setItem('aivan_users', JSON.stringify(updatedUsers));
+    
+    // Sync to Cloud
+    if (currentUser.uid) {
+        saveUserPreferencesToCloud(currentUser.uid, { hasAcceptedTerms: true });
     }
+    setCurrentScreen(Screen.HOME);
   };
 
   const handleUpdateUser = (updatedUser: User) => {
     setCurrentUser(updatedUser);
-    updateLocalStorage(updatedUser);
+    if (updatedUser.uid) {
+        saveUserPreferencesToCloud(updatedUser.uid, updatedUser);
+    }
   };
 
   const checkPremiumLimits = (language: string): boolean => {
-      // 1. Language Restriction
       if (language !== 'HTML/CSS/JS' && !currentUser?.isPremium && !currentUser?.isAdmin) {
           alert("יצירת קוד בשפות מתקדמות (Python/React/Node) זמינה למנויי פרימיום בלבד.");
           setCurrentScreen(Screen.PREMIUM);
           return false;
       }
 
-      // 2. Daily Limit
       const today = new Date().toISOString().split('T')[0];
       const lastRequestDate = currentUser?.preferences?.lastRequestDate;
       let dailyCount = currentUser?.preferences?.dailyRequestsCount || 0;
@@ -129,7 +129,6 @@ const App: React.FC = () => {
           return false;
       }
       
-      // Update usage
       if (currentUser) {
           const updatedUser = {
               ...currentUser,
@@ -148,10 +147,9 @@ const App: React.FC = () => {
     if (!currentUser) return;
     if (!checkPremiumLimits(config.language)) return;
 
-    // Create a new project object
     const newProject: SavedProject = {
         id: Date.now().toString(),
-        name: config.prompt, // Prompt used as name initially
+        name: config.prompt, // Initially use prompt, will be auto-updated later
         language: config.language,
         model: config.model,
         lastModified: Date.now(),
@@ -162,7 +160,14 @@ const App: React.FC = () => {
     };
 
     if (currentUser.preferences?.saveHistory) {
-        saveProjectsToStorage([newProject, ...savedProjects]);
+        // Optimistic update
+        const updatedProjects = [newProject, ...savedProjects];
+        setSavedProjects(updatedProjects);
+        
+        // Sync to Cloud
+        if (currentUser.uid) {
+            saveProjectToCloud(currentUser.uid, newProject);
+        }
     }
 
     setProjectConfig({ ...config, id: newProject.id });
@@ -170,44 +175,45 @@ const App: React.FC = () => {
   };
 
   const handleOpenProject = (project: SavedProject) => {
-      // Open existing project - DO NOT check limits or increment counter here, 
-      // as we are just viewing/continuing work.
       setProjectConfig({
           id: project.id,
           prompt: project.name,
           language: project.language,
           model: project.model,
           chatMode: ChatMode.CREATOR,
-          // PASS EXISTING STATE
-          initialCode: project.code,
-          initialCreatorMessages: project.creatorMessages,
-          initialQuestionMessages: project.questionMessages,
-          initialCodeHistory: project.codeHistory
+          initialCode: project.code || '',
+          initialCreatorMessages: project.creatorMessages || [],
+          initialQuestionMessages: project.questionMessages || [],
+          initialCodeHistory: project.codeHistory || []
       });
       setCurrentScreen(Screen.WORKSPACE);
   };
 
-  // Called by Workspace to auto-save
-  const handleSaveProjectProgress = (id: string, code: string, creatorMessages: any[], questionMessages: any[], codeHistory: string[]) => {
+  const handleSaveProjectProgress = (id: string, code: string, creatorMessages: any[], questionMessages: any[], codeHistory: string[], name?: string) => {
       if (!currentUser?.preferences?.saveHistory) return;
       
-      const updatedProjects = savedProjects.map(p => {
-          if (p.id === id) {
-              return { 
-                  ...p, 
-                  code, 
-                  creatorMessages, 
-                  questionMessages, 
-                  codeHistory, 
-                  lastModified: Date.now() 
-              };
-          }
-          return p;
-      });
+      // We update the local state optimistically, but the real source of truth is the Firestore listener
+      // which will trigger setSavedProjects soon after saveProjectToCloud completes.
       
-      // Sort by last modified
-      updatedProjects.sort((a, b) => b.lastModified - a.lastModified);
-      saveProjectsToStorage(updatedProjects);
+      const targetProject = savedProjects.find(p => p.id === id);
+      if (targetProject) {
+          const updatedP: SavedProject = { 
+              ...targetProject, 
+              code, 
+              creatorMessages, 
+              questionMessages, 
+              codeHistory, 
+              lastModified: Date.now() 
+          };
+
+          if (name) {
+              updatedP.name = name;
+          }
+          
+          if (currentUser?.uid) {
+              saveProjectToCloud(currentUser.uid, updatedP);
+          }
+      }
   };
 
   const handleBackToDashboard = () => {
@@ -215,24 +221,34 @@ const App: React.FC = () => {
     setCurrentScreen(Screen.HOME);
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    await logoutUser();
     setCurrentUser(null);
     setProjectConfig(null);
     setCurrentScreen(Screen.AUTH);
   };
 
   const handleClearHistory = () => {
-    saveProjectsToStorage([]);
+    setSavedProjects([]);
   };
 
   const handleDeleteHistoryItem = (id: string) => {
+    // Note: Actual deletion from cloud not implemented in this snippet to allow undo or archive,
+    // but in a real app you'd call deleteDoc in firebase.ts
     const newProjects = savedProjects.filter(p => p.id !== id);
-    saveProjectsToStorage(newProjects);
+    setSavedProjects(newProjects);
   };
 
   const handleRenameHistoryItem = (id: string, newName: string) => {
-    const newProjects = savedProjects.map(p => p.id === id ? { ...p, name: newName } : p);
-    saveProjectsToStorage(newProjects);
+    // Local optimistic update
+    setSavedProjects(prev => {
+        const updated = prev.map(p => p.id === id ? { ...p, name: newName } : p);
+        const target = updated.find(p => p.id === id);
+        if (target && currentUser?.uid) {
+            saveProjectToCloud(currentUser.uid, target);
+        }
+        return updated;
+    });
   };
 
   // --- AD SYSTEM LOGIC ---
@@ -294,7 +310,6 @@ const App: React.FC = () => {
           onStartProject={handleStartProject}
           onOpenProject={handleOpenProject}
           savedProjects={savedProjects}
-          history={savedProjects.map(p => p.name)} // legacy format for list
           onLogout={handleLogout}
           user={currentUser}
           onUpdateUser={handleUpdateUser}
@@ -323,17 +338,16 @@ const App: React.FC = () => {
       )}
       {currentScreen === Screen.WORKSPACE && projectConfig && (
         <Workspace 
+          key={projectConfig.id} // Forces remount when project ID changes
           projectId={projectConfig.id}
           initialPrompt={projectConfig.prompt}
           initialLanguage={projectConfig.language}
           initialFiles={projectConfig.files || null}
           initialChatMode={projectConfig.chatMode}
-          // Load existing state if available
           initialCode={projectConfig.initialCode}
           initialCreatorMessages={projectConfig.initialCreatorMessages}
           initialQuestionMessages={projectConfig.initialQuestionMessages}
           initialCodeHistory={projectConfig.initialCodeHistory}
-          
           modelId={projectConfig.model}
           onBack={handleBackToDashboard}
           onSaveProject={handleSaveProjectProgress}

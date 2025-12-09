@@ -15,7 +15,6 @@
 
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet" />
-    <script src="https://accounts.google.com/gsi/client" async defer></script>
     <style>
       @import url('https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;700;900&display=swap');
       
@@ -49,6 +48,44 @@
         background: linear-gradient(-45deg, #3b82f6, #a855f7, #ec4899, #eab308);
         background-size: 400% 400%;
         animation: gradientBG 15s ease infinite;
+      }
+
+      /* PREMIUM ANIMATIONS */
+      @keyframes borderRotate {
+        0% { background-position: 0% 50%; }
+        50% { background-position: 100% 50%; }
+        100% { background-position: 0% 50%; }
+      }
+
+      .premium-border {
+        position: relative;
+        z-index: 1;
+        border: none !important;
+      }
+
+      .premium-border::before {
+        content: "";
+        position: absolute;
+        inset: -3px; /* Border thickness */
+        border-radius: inherit;
+        padding: 3px; 
+        background: linear-gradient(45deg, #ec4899, #3b82f6, #a855f7, #eab308);
+        background-size: 300% 300%;
+        -webkit-mask: 
+           linear-gradient(#fff 0 0) content-box, 
+           linear-gradient(#fff 0 0);
+        -webkit-mask-composite: xor;
+        mask-composite: exclude;
+        animation: borderRotate 3s ease infinite;
+        pointer-events: none;
+        z-index: -1;
+      }
+      
+      /* Full background gradient animation for icons/fills */
+      .premium-bg-anim {
+         background: linear-gradient(45deg, #ec4899, #3b82f6, #a855f7, #eab308);
+         background-size: 300% 300%;
+         animation: borderRotate 3s ease infinite;
       }
 
       /* Themes */
@@ -238,12 +275,13 @@
 <script type="importmap">
 {
   "imports": {
-    "react": "https://aistudiocdn.com/react@^19.2.0",
-    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
-    "react/": "https://aistudiocdn.com/react@^19.2.0/",
-    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.30.0",
-    "vite": "https://aistudiocdn.com/vite@^7.2.4",
-    "@vitejs/plugin-react": "https://aistudiocdn.com/@vitejs/plugin-react@^5.1.1"
+    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.32.0",
+    "react/": "https://aistudiocdn.com/react@^19.2.1/",
+    "react": "https://aistudiocdn.com/react@^19.2.1",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.1/",
+    "@vitejs/plugin-react": "https://aistudiocdn.com/@vitejs/plugin-react@^5.1.2",
+    "vite": "https://aistudiocdn.com/vite@^7.2.7",
+    "firebase/": "https://aistudiocdn.com/firebase@^12.6.0/"
   }
 }
 </script>

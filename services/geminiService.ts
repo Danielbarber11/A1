@@ -3,14 +3,21 @@ import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 import { ChatMessage, Role, ChatMode } from "../types";
 
 // --- API KEYS ---
-const GEMINI_API_KEY = process.env.API_KEY;
+// The API key must be obtained exclusively from the environment variable process.env.API_KEY.
+// We use it directly in the constructor below.
 
-export const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+export const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 const BASE_SYSTEM_INSTRUCTION = `
-אתה "אייבן" (Aivan), מומחה עולמי לפיתוח אתרים (Senior Full Stack Web Developer) וארכיטקט UI/UX.
-המטרה העליונה שלך היא לבנות אתרים מרהיבים, מודרניים, רספונסיביים ופונקציונליים לחלוטין.
-דבר תמיד בעברית אדיבה ומקצועית.
+You are Aivan, an expert Full Stack Web Developer.
+Your goal is to generate COMPLETE, WORKING HTML websites in a single file.
+
+### CRITICAL OUTPUT RULES:
+1. **NO PREAMBLE**: Start your response DIRECTLY with the code or a very brief confirmation.
+2. **HTML FORMAT**: You MUST output the code inside a standard code block or starting with <!DOCTYPE html>.
+3. **SINGLE FILE**: CSS and JS must be embedded within the HTML file (using <style> and <script> tags).
+4. **NO PLACEHOLDERS**: Do not use "..." or comments like "rest of code here". Write the full, functional code.
+5. **HEBREW UI**: The website interface should be in Hebrew (dir="rtl") unless requested otherwise.
 `;
 
 export const fileToPart = (file: File): Promise<{ inlineData: { data: string; mimeType: string } }> => {
@@ -38,54 +45,28 @@ const buildContextAndInstructions = (
 ) => {
   let fullPrompt = prompt;
 
-  // Inject Current Code Context if available (Branching Logic)
   if (currentCode) {
-    const codeContext = `\n\n[הקוד הנוכחי במערכת]\n(המשתמש צופה בגרסה זו כרגע. עליך לערוך ולשנות את הקוד הזה ספציפית בהתאם לבקשה):\n\`\`\`html\n${currentCode}\n\`\`\`\n\n`;
+    const codeContext = `\n\n[EXISTING CODE TO MODIFY]\n\`\`\`html\n${currentCode}\n\`\`\`\n\nIMPORTANT: Return the FULL updated code, not just diffs.\n`;
     fullPrompt = codeContext + fullPrompt;
   }
 
   let historyContext = "";
   if (history.length > 0) {
-    historyContext = "היסטוריית שיחה:\n" + history.map(msg => `${msg.role === Role.USER ? 'User' : 'Aivan'}: ${msg.text}`).join("\n") + "\n\nבקשה חדשה:\n";
+    const recentHistory = history.slice(-10);
+    historyContext = "Chat History:\n" + recentHistory.map(msg => `${msg.role === Role.USER ? 'User' : 'Aivan'}: ${msg.text}`).join("\n") + "\n\nUser Request:\n";
     fullPrompt = historyContext + fullPrompt;
   }
 
   let specificInstruction = "";
   if (chatMode === ChatMode.CREATOR) {
     specificInstruction = `
-    מצב עבודה: **סוכן / יוצר אתרים (Website Creator & Editor)**.
-    
-    הנחיות קריטיות ליצירה ועריכה:
-    1. **עריכה מול יצירה**:
-       - אם סופק [הקוד הנוכחי במערכת], **אסור לך ליצור אתר חדש מאפס**.
-       - עליך לקחת את הקוד הקיים ולבצע בו אך ורק את השינויים שהמשתמש ביקש (הוספת אלמנטים, שינוי עיצוב, תיקון באגים).
-       - שמור על המבנה הקיים והקפד לא למחוק חלקים חיוניים אלא אם התבקשת.
-    2. **מומחיות**: צור קוד HTML/CSS/JS מלא, מודרני ונקי. השתמש ב-Tailwind CSS לעיצוב מהיר ומרשים (הספרייה כבר קיימת ב-Environment).
-    3. **קובץ יחיד**: פלט הקוד חייב להיות קובץ HTML יחיד הכולל את ה-CSS (<style>) וה-JS (<script>) בתוכו, כדי שיעבוד בתצוגה המקדימה.
-    
-    4. **פורמט תשובה (חשוב מאוד!)**:
-       - חלק ראשון: הסבר טקסטואלי קצר על השינויים (בעברית).
-       - **מפריד**: כתוב בדיוק את המחרוזת: "___AIVAN_CODE_START___"
-       - חלק שני: בלוק קוד (Markdown) המכיל את הקוד המלא והמעודכן.
-       - **חובה**: הקוד חייב להיות בתוך בלוק \`\`\`html ... \`\`\`.
-       - **חובה**: תמיד החזר את הקוד המלא (Full Source Code), לא רק מקטעים (Snippets).
-    
-    דוגמה לפלט:
-    "הוספתי את כפתור יצירת הקשר ושניתי את הרקע לכחול."
-    ___AIVAN_CODE_START___
-    \`\`\`html
-    <html>...</html>
-    \`\`\`
-
-    חשוב מאוד: אם המשתמש שואל שאלה כללית שאינה קשורה לבנייה או עריכת האתר, ענה:
-    "הבוט רק מוסיף, מתקן שגיאות ומשפר את הקוד".
+    MODE: **CREATOR**.
+    TASK: Generate or Modify HTML/CSS/JS code.
     `;
   } else {
     specificInstruction = `
-    מצב עבודה: **שאלה / ייעוץ (Consultant)**.
-    המטרה שלך היא לענות לשאלות טכניות, להסביר לוגיקה, להציע רעיונות לעיצוב או לעזור בדיבאג.
-    אל תכתוב את כל הקוד של האפליקציה מחדש אלא אם התבקשת ספציפית.
-    התמקד בהסברים טקסטואליים ברורים, טיפים ודוגמאות קוד קצרות (Snippets) במידת הצורך.
+    MODE: **CONSULTANT**.
+    TASK: Answer questions or explain the code. Do not generate full code unless asked.
     `;
   }
 
@@ -120,7 +101,23 @@ const buildGeminiRequest = async (
   };
 };
 
-// --- UNIFIED SEND MESSAGE ---
+export const generateProjectTitle = async (prompt: string, codeSnippet: string): Promise<string> => {
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: [
+        { 
+          role: 'user', 
+          parts: [{ text: `Generate a short, catchy Hebrew title (2-4 words) for this web project based on the prompt: "${prompt}". Do not use quotes.` }] 
+        }
+      ]
+    });
+    return response.text?.trim() || prompt.substring(0, 20);
+  } catch (e) {
+    return prompt.substring(0, 20);
+  }
+};
+
 export const sendMessageToGemini = async (
   prompt: string,
   history: ChatMessage[],
@@ -129,7 +126,6 @@ export const sendMessageToGemini = async (
   chatMode: ChatMode = ChatMode.CREATOR,
   currentCode?: string
 ): Promise<string> => {
-  // Simple non-streaming wrapper for legacy support if needed
   let fullText = "";
   const generator = sendMessageToGeminiStream(prompt, history, files, modelId, chatMode, currentCode);
   for await (const chunk of generator) {
@@ -138,7 +134,6 @@ export const sendMessageToGemini = async (
   return fullText;
 };
 
-// --- UNIFIED STREAMING FUNCTION ---
 export async function* sendMessageToGeminiStream(
   prompt: string,
   history: ChatMessage[],
@@ -149,11 +144,10 @@ export async function* sendMessageToGeminiStream(
   signal?: AbortSignal
 ) {
   let retryCount = 0;
-  const maxRetries = 3;
+  const maxRetries = 2;
 
-  while (true) {
+  while (retryCount <= maxRetries) {
     try {
-       // GOOGLE GEMINI HANDLER (Default)
        const { contents, systemInstruction } = await buildGeminiRequest(prompt, history, files, chatMode, currentCode);
 
        const responseStream = await ai.models.generateContentStream({
@@ -169,25 +163,16 @@ export async function* sendMessageToGeminiStream(
        return;
 
     } catch (error: any) {
-      if (signal?.aborted) {
-        console.log("Stream aborted by user");
-        return;
-      }
-
-      // Handle Rate Limit (429)
-      if (error.status === 429 || error.code === 429 || error.message?.includes('429')) {
+      if (signal?.aborted) return;
+      
+      console.error("Gemini API Error:", error);
+      
+      if (error.status === 429 || error.message?.includes('429')) {
         retryCount++;
-        if (retryCount > maxRetries) {
-          console.error("Provider 429 Exhausted:", error);
-          throw new Error("הגעת למגבלת הבקשות (Rate Limit) במודל זה. אנא נסה מודל אחר או המתן.");
-        }
-        console.warn(`Rate limit hit. Retrying (${retryCount}/${maxRetries})...`);
-        await new Promise(resolve => setTimeout(resolve, 2000 * Math.pow(2, retryCount)));
+        await new Promise(resolve => setTimeout(resolve, 2000 * retryCount));
         continue;
       }
-
-      console.error("AI Service Error:", error);
-      throw new Error("שגיאה בתקשורת עם השרת (AI Provider Error).");
+      throw new Error("שגיאה בתקשורת עם השרת. אנא נסה שוב.");
     }
   }
 }
